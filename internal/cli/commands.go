@@ -339,6 +339,10 @@ func cmdVerify(env *env, args []string) error {
 		fmt.Fprintf(env.stdout, "signature     absent\n")
 	case verr != nil:
 		fmt.Fprintf(env.stdout, "signature     unusable: %v\n", verr)
+	case res.SignatureValid && !res.DigestMatches:
+		// Saying "valid" alone here would read as reassurance, when what it means
+		// is that someone signed a digest the record no longer matches.
+		fmt.Fprintf(env.stdout, "signature     valid over the stated digest, which no longer matches this record (key %s)\n", res.KeyID)
 	default:
 		fmt.Fprintf(env.stdout, "signature     %s\n", okNo(res.SignatureValid, "valid, key "+res.KeyID, "does NOT verify against key "+res.KeyID))
 	}
