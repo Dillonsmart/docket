@@ -68,13 +68,23 @@ docket init
 
 That installs a `prepare-commit-msg` hook (which writes the trailer — the audited agent never writes its own audit record), a `post-commit` hook (which stores the record), the `refs/docket/*` refspec, a local signing key, and the Claude Code hooks that let docket observe edits made through the shell.
 
-From then on, every commit gets a trailer:
+From then on, every commit gets one extra line, in the trailer block where `Signed-off-by` and `Reviewed-by` live:
 
 ```
-Docket: sha256:8f3a2b…
+    Add the session helper
+
+    The API needs a stable id per session, and the obvious place is here
+    rather than in the middleware.
+
+    Reviewed-by: Someone Else <someone@example.com>
+    Docket: sha256:db77fdb4b0c1fc6cc7644d3fa2204267e25799d74a6f8f665aff3d32b12c39af
 ```
 
-and a signed record on `refs/docket/records`, addressed by that digest.
+That is the whole footprint in your history. `git log --oneline` is unchanged, your subject line is untouched, and the digest names a signed record on `refs/docket/records` rather than a URL — so nothing in the permanent history depends on a service still existing.
+
+Amending rebuilds the record and replaces the trailer, so a commit never points at the content it used to have. A merge gets no trailer, and neither does a commit with nothing attributable in it. Rebases and cherry-picks are the awkward case: git does not run `prepare-commit-msg` for either, so the trailer travels onto a diff it was not built from — `docket verify` reports that plainly rather than trusting the trailer.
+
+To stop: delete the two hooks in `.git/hooks`. Existing trailers stay in the history as inert text.
 
 ## Use it
 

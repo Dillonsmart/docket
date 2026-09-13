@@ -61,19 +61,25 @@ func prepareCommitMsg(repo *gitx.Repo, args []string) error {
 		// A merge introduces no authored lines of its own.
 		return nil
 	}
-	existing, err := os.ReadFile(msgFile)
-	if err != nil {
+	if _, err := os.ReadFile(msgFile); err != nil {
 		return err
 	}
-	if _, ok := gitx.TrailerIn(string(existing), cer.Trailer); ok {
-		return nil // amending a commit that already has one
+
+	// An amend replaces HEAD rather than adding to it, so the change being
+	// described runs from HEAD's parent. Diffing against HEAD would build a
+	// record of the amendment alone, attached to a commit containing both.
+	base := ""
+	if amending(repo, args) {
+		if parent, err := repo.BaseOf("HEAD"); err == nil {
+			base = parent
+		}
 	}
 
 	signer, err := signerFor(repo, false)
 	if err != nil {
 		return err
 	}
-	res, err := build.Build(build.Options{Repo: repo, Signer: signer})
+	res, err := build.Build(build.Options{Repo: repo, Base: base, Signer: signer})
 	if err != nil {
 		return err
 	}
@@ -87,12 +93,37 @@ func prepareCommitMsg(repo *gitx.Repo, args []string) error {
 	}
 	// git interpret-trailers knows where a trailer belongs, including how to
 	// handle the comment block an interactive commit adds.
+	//
+	// Replace rather than append: an amend runs this hook again over a message
+	// that already carries a trailer, and keeping the old one would leave the
+	// commit pointing at a record of the content it used to have.
 	if _, err := repo.Git("interpret-trailers", "--in-place",
+		"--if-exists", "replace",
 		"--trailer", cer.Trailer+": "+res.Record.PayloadHash, msgFile); err != nil {
 		return err
 	}
 	logf(repo, "prepared %s for %d hunks", res.Record.PayloadHash, len(res.Record.Hunks))
 	return nil
+}
+
+// amending reports whether this commit will replace HEAD.
+//
+// git gives prepare-commit-msg the source and, for a reused message, the commit
+// it came from; an amend names HEAD. The reflog action is the second signal,
+// because `git commit -C HEAD` looks identical from the arguments alone.
+func amending(repo *gitx.Repo, args []string) bool {
+	if strings.Contains(os.Getenv("GIT_REFLOG_ACTION"), "amend") {
+		return true
+	}
+	if len(args) < 3 || args[1] != "commit" {
+		return false
+	}
+	head, err := repo.RevParse("HEAD")
+	if err != nil {
+		return false
+	}
+	named, err := repo.RevParse(args[2])
+	return err == nil && named == head
 }
 
 // postCommit stores the record now that the commit exists.

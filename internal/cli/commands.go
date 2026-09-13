@@ -10,6 +10,7 @@ import (
 
 	"github.com/Dillonsmart/docket/internal/build"
 	"github.com/Dillonsmart/docket/internal/cer"
+	"github.com/Dillonsmart/docket/internal/diffx"
 	"github.com/Dillonsmart/docket/internal/gate"
 	"github.com/Dillonsmart/docket/internal/gitx"
 	"github.com/Dillonsmart/docket/internal/render"
@@ -343,6 +344,20 @@ func cmdVerify(env *env, args []string) error {
 	}
 	fmt.Fprintf(env.stdout, "trust         %s\n", rec.Trust)
 
+	// A digest that checks out only proves the record is intact. Whether it
+	// describes *this* commit is a separate question, and the answer is no
+	// whenever a commit has been rebased, cherry-picked or squashed: git does
+	// not run prepare-commit-msg for any of those, so the trailer survives onto
+	// content it was never built from.
+	switch fit, err := describes(repo, sha, rec); {
+	case err != nil:
+		fmt.Fprintf(env.stdout, "describes     could not check: %v\n", err)
+	case fit == "":
+		fmt.Fprintf(env.stdout, "describes     ok, the record matches this commit's diff\n")
+	default:
+		fmt.Fprintf(env.stdout, "describes     NO: %s\n", fit)
+	}
+
 	trailer, hasTrailer := repo.Trailer(sha, cer.Trailer)
 	switch {
 	case !hasTrailer:
@@ -360,6 +375,47 @@ func cmdVerify(env *env, args []string) error {
 		return fail(4, "verification failed")
 	}
 	return nil
+}
+
+// describes reports why a record does not match a commit, or "" when it does.
+//
+// The check is structural — base, file count, added lines — so it works on a
+// machine that has never seen the session the record was built from.
+func describes(repo *gitx.Repo, sha string, rec *cer.Record) (string, error) {
+	parent, err := repo.BaseOf(sha)
+	if err != nil {
+		return "", err
+	}
+	if rec.Base != "" && rec.Base != parent {
+		return fmt.Sprintf("the record was built against %s, but this commit's parent is %s",
+			short(rec.Base), short(parent)), nil
+	}
+	diff, err := repo.Diff(gitx.DiffOpts{Base: parent, Head: sha})
+	if err != nil {
+		return "", err
+	}
+	files, added := 0, 0
+	for _, fd := range diffx.ParseUnified(diff) {
+		if fd.Binary || fd.Deleted {
+			continue
+		}
+		counted := false
+		for _, h := range fd.Hunks {
+			if len(h.AddedLines) == 0 {
+				continue // deletion-only hunks carry no provenance either side
+			}
+			added += len(h.AddedLines)
+			counted = true
+		}
+		if counted {
+			files++
+		}
+	}
+	if files != rec.Totals.Files || added != rec.Totals.AddedLines {
+		return fmt.Sprintf("this commit adds %d lines across %d files; the record describes %d across %d",
+			added, files, rec.Totals.AddedLines, rec.Totals.Files), nil
+	}
+	return "", nil
 }
 
 func cmdGate(env *env, args []string) error {

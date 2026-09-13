@@ -262,3 +262,90 @@ func TestDoctorReportsWhatIsMissing(t *testing.T) {
 		t.Errorf("doctor still reports missing hooks after init:\n%s", out)
 	}
 }
+
+// Amending rewrites the commit, so the record has to be rebuilt and the trailer
+// replaced. Leaving the old one would point the commit at a record of content
+// it no longer has.
+func TestAmendReplacesTheTrailerAndTheRecord(t *testing.T) {
+	h := newHarness(t)
+	if _, code := h.run("", "init"); code != 0 {
+		t.Fatal("init failed")
+	}
+	h.write("src/a.js", "export const a = 1;\n")
+	sha := h.commit("feat: a")
+	first, _ := trailerOf(t, h, sha)
+
+	// Amend with more content than the original commit had.
+	h.write("src/a.js", "export const a = 1;\nexport const b = 2;\n")
+	h.git("add", "-A")
+	msgPath := filepath.Join(h.dir, ".git", "COMMIT_EDITMSG")
+	if out, code := h.run("", "hook", "prepare-commit-msg", msgPath, "commit", sha); code != 0 {
+		t.Fatalf("prepare-commit-msg exited %d: %s", code, out)
+	}
+	h.git("commit", "-q", "--amend", "--no-verify", "-F", msgPath)
+	if out, code := h.run("", "hook", "post-commit"); code != 0 {
+		t.Fatalf("post-commit exited %d: %s", code, out)
+	}
+
+	amended := h.git("rev-parse", "HEAD")
+	second, count := trailerOf(t, h, amended)
+	if count != 1 {
+		t.Errorf("the amended commit carries %d docket trailers, want 1", count)
+	}
+	if second == first {
+		t.Error("the trailer still names the record built from the pre-amend content")
+	}
+
+	out, code := h.run("", "verify", amended)
+	if code != 0 {
+		t.Fatalf("verify exited %d: %s", code, out)
+	}
+	if !strings.Contains(out, "describes     ok") {
+		t.Errorf("the record should describe the amended commit:\n%s", out)
+	}
+}
+
+// A cherry-pick or rebase re-applies a commit onto a different parent without
+// running prepare-commit-msg, so the trailer rides along onto a diff it was
+// never built from. Verify has to notice.
+func TestRecordThatDoesNotDescribeItsCommitIsReported(t *testing.T) {
+	h := newHarness(t)
+	if _, code := h.run("", "init"); code != 0 {
+		t.Fatal("init failed")
+	}
+	h.write("base.js", "export const base = 0;\n")
+	root := h.commit("chore: base")
+
+	h.write("base.js", "export const base = 1;\nexport const extra = 2;\n")
+	h.commit("chore: more base")
+
+	h.write("src/a.js", "export const a = 1;\nexport const b = 2;\n")
+	feature := h.commit("feat: a")
+
+	// Re-apply the last commit onto the root, the way a rebase would: same
+	// change, different parent from the one its record was built against.
+	h.git("checkout", "-q", "-b", "side", root)
+	h.git("cherry-pick", "--no-commit", feature)
+	h.git("commit", "-q", "--no-verify", "-m", h.git("show", "-s", "--format=%B", feature))
+
+	picked := h.git("rev-parse", "HEAD")
+	if _, count := trailerOf(t, h, picked); count != 1 {
+		t.Fatalf("expected the trailer to travel with the message, got %d", count)
+	}
+	out, code := h.run("", "verify", picked)
+	if !strings.Contains(out, "describes     NO") {
+		t.Errorf("verify should report that the record does not describe this commit (exit %d):\n%s", code, out)
+	}
+}
+
+func trailerOf(t *testing.T, h *harness, sha string) (digest string, count int) {
+	t.Helper()
+	body := h.git("show", "-s", "--format=%B", sha)
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "Docket:") {
+			count++
+			digest = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "Docket:"))
+		}
+	}
+	return digest, count
+}
