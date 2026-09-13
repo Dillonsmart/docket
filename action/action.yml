@@ -8,8 +8,10 @@ branding:
 
 inputs:
   version:
-    description: Version of docket to install (a tag, branch or commit).
-    default: main
+    description: >-
+      Version of docket to use: "latest" or a release tag such as v0.1.0 fetches
+      a prebuilt binary; any other value (a branch or commit) builds from source.
+    default: latest
   base:
     description: Base revision. Defaults to the pull request's base.
     default: ""
@@ -34,13 +36,34 @@ outputs:
 runs:
   using: composite
   steps:
+    # The common path needs no toolchain at all: docket is a single static
+    # binary, so the runner downloads it and starts.
+    - name: Install docket
+      if: ${{ inputs.version == 'latest' || startsWith(inputs.version, 'v') }}
+      shell: bash
+      env:
+        DOCKET_VERSION: ${{ inputs.version == 'latest' && '' || inputs.version }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/docket-bin"
+        INSTALLER="$GITHUB_ACTION_PATH/../install.sh"
+        if [ ! -f "$INSTALLER" ]; then
+          INSTALLER="$RUNNER_TEMP/install.sh"
+          curl -fsSL https://raw.githubusercontent.com/Dillonsmart/docket/main/install.sh -o "$INSTALLER"
+        fi
+        DOCKET_INSTALL_DIR="$RUNNER_TEMP/docket-bin" sh "$INSTALLER"
+        echo "$RUNNER_TEMP/docket-bin" >> "$GITHUB_PATH"
+
+    # Building from source is the escape hatch for a branch or an unreleased fix.
     - name: Set up Go
+      if: ${{ inputs.version != 'latest' && !startsWith(inputs.version, 'v') }}
       uses: actions/setup-go@v5
       with:
         go-version: "1.25"
         cache: false
 
-    - name: Install docket
+    - name: Build docket from source
+      if: ${{ inputs.version != 'latest' && !startsWith(inputs.version, 'v') }}
       shell: bash
       run: go install github.com/Dillonsmart/docket/cmd/docket@${{ inputs.version }}
 

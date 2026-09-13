@@ -20,7 +20,7 @@ jobs:
 
 | Input | Default | Meaning |
 |---|---|---|
-| `version` | `main` | Version of docket to install. |
+| `version` | `latest` | `latest` or a tag (`v0.1.0`) downloads the prebuilt binary — no Go on the runner. Any other value builds that branch or commit from source. |
 | `base` / `head` | the pull request's | Revisions to review. |
 | `comment` | `true` | Post and update one comment on the pull request. |
 | `fail-under` | empty | Fail the job when any hunk is below this evidence density. |

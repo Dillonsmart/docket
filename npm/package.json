@@ -1,0 +1,15 @@
+{
+  "name": "@dillonsmart/docket",
+  "version": "0.1.0",
+  "description": "A per-commit evidence record for agent-written code. Installs the docket binary on first run.",
+  "bin": { "docket": "bin/docket.js" },
+  "files": ["bin/docket.js", "README.md"],
+  "engines": { "node": ">=18" },
+  "repository": { "type": "git", "url": "git+https://github.com/Dillonsmart/docket.git" },
+  "homepage": "https://github.com/Dillonsmart/docket#readme",
+  "bugs": { "url": "https://github.com/Dillonsmart/docket/issues" },
+  "license": "Apache-2.0",
+  "keywords": ["git", "code-review", "provenance", "ai", "agents", "evidence", "attribution"],
+  "os": ["darwin", "linux", "win32"],
+  "cpu": ["x64", "arm64"]
+}

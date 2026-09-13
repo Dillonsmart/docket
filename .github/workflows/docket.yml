@@ -18,4 +18,6 @@ jobs:
           fetch-depth: 0
       - uses: ./action
         with:
-          version: main
+          # This repository reviews itself with the working tree's own action;
+          # elsewhere, drop this and take the released binary.
+          version: ${{ github.ref_name }}

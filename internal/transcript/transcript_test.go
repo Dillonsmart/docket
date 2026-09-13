@@ -187,3 +187,46 @@ func TestApplyPatchRefusesAMismatch(t *testing.T) {
 		t.Errorf("patch application = %v %v", got, applied)
 	}
 }
+
+// A runner named as a flag is not a test run. `laravel new --pest` scaffolds a
+// project; counting it as a check would put evidence on a hunk nothing checked.
+func TestRunnerMentionedAsAFlagIsNotATestRun(t *testing.T) {
+	path := writeTranscript(t, []map[string]any{
+		toolUse("a1", "t1", "Bash", map[string]any{"command": "laravel new villains --database=pgsql --pest --no-interaction"}, ""),
+		toolResult("u1", "t1", map[string]any{"stdout": "Application ready", "stderr": "", "interrupted": false}),
+		toolUse("a2", "t2", "Bash", map[string]any{"command": "./vendor/bin/pest --colors=never"}, ""),
+		toolResult("u2", "t2", map[string]any{"stdout": "  Tests:    25 passed (76 assertions)", "stderr": "", "interrupted": false}),
+	})
+	s, _, err := Parse(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Commands[0].Test != nil {
+		t.Errorf("scaffolding command was read as a test run: %+v", s.Commands[0].Test)
+	}
+	if s.Commands[1].Test == nil || s.Commands[1].Test.Outcome != "pass" {
+		t.Errorf("real pest run = %+v", s.Commands[1].Test)
+	}
+}
+
+// Agents often append `; echo "EXIT=$?"` because the transcript records no exit
+// code. Believe it — unless a pipe means it is reporting the exit code of tail.
+func TestReportedExitCodeIsUsedOnlyWhenItMeansAnything(t *testing.T) {
+	path := writeTranscript(t, []map[string]any{
+		toolUse("a1", "t1", "Bash", map[string]any{"command": `go test ./...; echo "EXIT=$?"`}, ""),
+		toolResult("u1", "t1", map[string]any{"stdout": "some output\nEXIT=1", "stderr": "", "interrupted": false}),
+		toolUse("a2", "t2", "Bash", map[string]any{"command": `go test ./... 2>&1 | tail -5; echo "EXIT=$?"`}, ""),
+		toolResult("u2", "t2", map[string]any{"stdout": "--- FAIL: TestThing\nFAIL\nEXIT=0", "stderr": "", "interrupted": false}),
+	})
+	s, _, err := Parse(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Commands[0].Test; got == nil || got.Outcome != "fail" || got.Confidence != "reported_exit_code" {
+		t.Errorf("unpiped run = %+v, want a failure read from the exit code", got)
+	}
+	// Through a pipe the marker is tail's exit code, so the output has the say.
+	if got := s.Commands[1].Test; got == nil || got.Outcome != "fail" || got.Confidence != "output_pattern" {
+		t.Errorf("piped run = %+v, want a failure read from the output", got)
+	}
+}

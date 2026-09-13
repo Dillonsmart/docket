@@ -40,6 +40,22 @@ No account. No network. The records live in the repository, on an orphan ref.
 
 ## Install
 
+A single static binary. No Go toolchain, no runtime, nothing to compile.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Dillonsmart/docket/main/install.sh | sh
+```
+
+Or without installing anything:
+
+```sh
+npx @dillonsmart/docket init
+```
+
+Or take the archive for your platform from [the releases page](https://github.com/Dillonsmart/docket/releases) — macOS and Linux on arm64 and x86-64, Windows on both — unpack it, and put `docket` on your PATH. Every release publishes `SHA256SUMS`; the installer checks them for you.
+
+Building from source stays available for anyone who wants it:
+
 ```sh
 go install github.com/Dillonsmart/docket/cmd/docket@latest
 ```
@@ -72,7 +88,33 @@ docket doctor                         # what can docket see here, and what can't
 docket gate --commits 20              # measure attribution against real history
 ```
 
-For pull requests, [the GitHub Action](action/) reads the records the commits brought with them and posts one comment, reordering the diff so the hunks nothing can vouch for come first and the well-covered boilerplate is collapsed underneath.
+For pull requests, [the GitHub Action](action/) reads the records the commits brought with them and posts one comment, reordering the diff so the hunks nothing can vouch for come first and the well-covered boilerplate is collapsed underneath. It downloads the same binary, so nothing needs installing on the runner either.
+
+### Reading someone's reasoning back
+
+The fields that answer *why does this code look like this* are `task`, `intent` and `attempt`:
+
+- **task** — the request this edit descends from, i.e. what the human actually asked for.
+- **intent** — what the agent said it was doing in the sentence immediately before it made the edit. This is where the reasoning lands, in the agent's own words.
+- **attempt** — code written into this same region and then taken out again, with the check that failed in between when there was one. The abandoned approaches are the part that is otherwise lost within hours.
+
+```
+$ docket explain database/migrations/0001_01_01_000000_create_players_table.php:54
+
+database/migrations/…:54 was last written by be66f35c5977
+
+  origin      claude-code/main via Edit
+  task        Look at the engine plan for this project, challenge any assumptions then start implementing
+  intent      Postgres `jsonb` normalises key order, so the replayed response wasn't byte-identical
+              to the original. For a stored response we only ever return verbatim, `json` is the
+              right column type.
+  attempt     Now the schema. Replacing the default `users` table with `players` as the
+              authenticatable model. [superseded]
+```
+
+`docket explain` finds the commit through `git blame`, so you can start from the code in front of you rather than having to know which commit to look in. `docket show <sha> --all --json` gives the whole record if you would rather read it as data.
+
+Docket stores short redacted excerpts, not the conversation: enough to reconstruct the decision, never the whole transcript, because whole transcripts carry secrets and grow without bound.
 
 ---
 

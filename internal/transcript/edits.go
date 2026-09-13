@@ -3,6 +3,7 @@ package transcript
 import (
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -279,8 +280,14 @@ func buildCommand(id string, seq int, p pending, raw json.RawMessage) *Command {
 	return c
 }
 
-// Runner patterns. Each entry names the runner and how its output reports
-// success or failure, because the transcript does not record exit codes.
+// Runner patterns.
+//
+// Each entry names the runner and how its output reports success or failure,
+// because the transcript does not record process exit codes.
+//
+// The leading boundary matters: `laravel new --pest` mentions pest without
+// running it, and counting that as a test execution would put a check on a hunk
+// that nothing ever checked.
 var runners = []struct {
 	name string
 	re   *regexp.Regexp
@@ -288,43 +295,53 @@ var runners = []struct {
 	pass *regexp.Regexp
 	fail *regexp.Regexp
 }{
-	{"vitest", regexp.MustCompile(`\bvitest\b`), "test",
+	{"vitest", cmdRe(`(?:npx\s+|pnpm\s+|yarn\s+|bun\s+)?vitest\b`), "test",
 		regexp.MustCompile(`(?m)Tests\s+\d+ passed|✓ .*\(\d+ tests?\)|Test Files\s+\d+ passed`),
 		regexp.MustCompile(`(?m)Tests\s+\d+ failed|FAIL\b|✗|Test Files\s+\d+ failed`)},
-	{"jest", regexp.MustCompile(`\bjest\b`), "test",
+	{"jest", cmdRe(`(?:npx\s+|pnpm\s+|yarn\s+)?jest\b`), "test",
 		regexp.MustCompile(`(?m)Tests:\s+\d+ passed|PASS\b`),
 		regexp.MustCompile(`(?m)Tests:.*\d+ failed|FAIL\b`)},
-	{"node-test", regexp.MustCompile(`node\s+--test|node:test`), "test",
+	{"node-test", cmdRe(`node\s+--test`), "test",
 		regexp.MustCompile(`(?m)^# pass \d+`), regexp.MustCompile(`(?m)^# fail [1-9]|^not ok `)},
-	{"go-test", regexp.MustCompile(`\bgo test\b`), "test",
+	{"go-test", cmdRe(`go\s+test\b`), "test",
 		regexp.MustCompile(`(?m)^ok\s|^PASS\b`), regexp.MustCompile(`(?m)^FAIL\b|^---\s+FAIL`)},
-	{"pytest", regexp.MustCompile(`\bpytest\b|python -m pytest`), "test",
+	{"pytest", cmdRe(`(?:python3?\s+-m\s+)?pytest\b`), "test",
 		regexp.MustCompile(`(?m)\d+ passed`), regexp.MustCompile(`(?m)\d+ failed|\d+ error`)},
-	{"phpunit", regexp.MustCompile(`\bphpunit\b`), "test",
+	{"phpunit", cmdRe(`(?:\S*/)?phpunit\b`), "test",
 		regexp.MustCompile(`(?m)^OK \(|Tests:\s+\d+,\s+Assertions`), regexp.MustCompile(`(?m)FAILURES!|ERRORS!|Tests:.*Failures: [1-9]`)},
-	{"pest", regexp.MustCompile(`\bpest\b|artisan test`), "test",
+	{"pest", cmdRe(`(?:\S*/)?pest\b|artisan\s+test\b`), "test",
 		regexp.MustCompile(`(?m)Tests:\s+.*\d+ passed`), regexp.MustCompile(`(?m)Tests:\s+.*\d+ failed|FAILED`)},
-	{"cargo-test", regexp.MustCompile(`\bcargo test\b`), "test",
+	{"cargo-test", cmdRe(`cargo\s+test\b`), "test",
 		regexp.MustCompile(`(?m)test result: ok`), regexp.MustCompile(`(?m)test result: FAILED`)},
-	{"rspec", regexp.MustCompile(`\brspec\b`), "test",
+	{"rspec", cmdRe(`(?:\S*/)?rspec\b`), "test",
 		regexp.MustCompile(`(?m)\d+ examples?, 0 failures`), regexp.MustCompile(`(?m)\d+ examples?, [1-9]\d* failures?`)},
-	{"bun-test", regexp.MustCompile(`\bbun test\b`), "test",
+	{"bun-test", cmdRe(`bun\s+test\b`), "test",
 		regexp.MustCompile(`(?m)\d+ pass`), regexp.MustCompile(`(?m)[1-9]\d* fail`)},
-	{"npm-test", regexp.MustCompile(`\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b`), "test",
+	{"npm-test", cmdRe(`(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b`), "test",
 		regexp.MustCompile(`(?m)pass(?:ed|ing)?\b`), regexp.MustCompile(`(?m)\bfail(?:ed|ing)?\b|\bERR!`)},
-	{"tsc", regexp.MustCompile(`\btsc\b|tsc --noEmit`), "typecheck",
-		regexp.MustCompile(`(?m)^\s*$|Found 0 errors`), regexp.MustCompile(`(?m)error TS\d+`)},
-	{"eslint", regexp.MustCompile(`\beslint\b`), "static_check",
+	{"tsc", cmdRe(`(?:npx\s+|pnpm\s+)?tsc\b`), "typecheck",
+		regexp.MustCompile(`(?m)Found 0 errors`), regexp.MustCompile(`(?m)error TS\d+`)},
+	{"eslint", cmdRe(`(?:npx\s+|pnpm\s+)?eslint\b`), "static_check",
 		regexp.MustCompile(`(?m)^\s*$`), regexp.MustCompile(`(?m)\d+ problems?|error\b`)},
-	{"phpstan", regexp.MustCompile(`\bphpstan\b`), "static_check",
+	{"phpstan", cmdRe(`(?:\S*/)?phpstan\b`), "static_check",
 		regexp.MustCompile(`(?m)\[OK\] No errors`), regexp.MustCompile(`(?m)\[ERROR\]|Found \d+ error`)},
-	{"go-vet", regexp.MustCompile(`\bgo vet\b`), "static_check",
+	{"go-vet", cmdRe(`go\s+vet\b`), "static_check",
 		regexp.MustCompile(`(?m)^\s*$`), regexp.MustCompile(`(?m)\.go:\d+`)},
-	{"golangci-lint", regexp.MustCompile(`\bgolangci-lint\b`), "static_check",
+	{"golangci-lint", cmdRe(`(?:\S*/)?golangci-lint\b`), "static_check",
 		regexp.MustCompile(`(?m)^\s*$`), regexp.MustCompile(`(?m)\.go:\d+`)},
-	{"pint", regexp.MustCompile(`\bpint\b`), "static_check",
+	{"pint", cmdRe(`(?:\S*/)?pint\b`), "static_check",
 		regexp.MustCompile(`(?m)PASS`), regexp.MustCompile(`(?m)FAIL`)},
 }
+
+// cmdRe anchors a runner pattern to the start of a command or of a pipeline
+// stage, so a runner named as a flag or inside a longer word is not a match.
+func cmdRe(body string) *regexp.Regexp {
+	return regexp.MustCompile(`(?:^|[\s;&|(])(?:\S*/)?(?:` + body + `)`)
+}
+
+// exitMarker catches the `; echo "EXIT=$?"` idiom agents use to surface an exit
+// code the transcript does not otherwise record.
+var exitMarker = regexp.MustCompile(`(?m)^\s*EXIT=(\d+)\s*$`)
 
 // Commands that can change files in ways docket cannot see. Their presence
 // between two recorded edits is what turns a confident attribution into
@@ -354,10 +371,19 @@ func classifyCommand(c *Command) {
 			continue
 		}
 		t := &TestRun{Runner: r.name, Outcome: "unknown", Confidence: "output_pattern"}
+		code, hasCode := reportedExitCode(c.Command, out)
 		switch {
 		case c.Interrupted:
 			t.Outcome = "unknown"
 			t.Summary = "interrupted before completion"
+		case hasCode:
+			// An exit code the command reported itself beats guessing from text.
+			t.Confidence = "reported_exit_code"
+			if code == 0 {
+				t.Outcome = "pass"
+			} else {
+				t.Outcome = "fail"
+			}
 		case r.fail.MatchString(out):
 			t.Outcome = "fail"
 		case r.pass.MatchString(out):
@@ -381,6 +407,26 @@ func classifyCommand(c *Command) {
 			return
 		}
 	}
+}
+
+// reportedExitCode reads an `EXIT=n` marker out of a command's output.
+//
+// It is only trustworthy when the runner is the last thing that ran: after a
+// pipeline, `$?` is the exit code of `tail`, which is 0 however badly the tests
+// failed. So a piped command falls back to reading the output.
+func reportedExitCode(command, output string) (int, bool) {
+	if strings.ContainsAny(command, "|") {
+		return 0, false
+	}
+	m := exitMarker.FindStringSubmatch(output)
+	if m == nil {
+		return 0, false
+	}
+	code, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
+	return code, true
 }
 
 // Kind reports what sort of check a command was, if any.
