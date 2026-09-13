@@ -1,0 +1,502 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Dillonsmart/docket/spec/cer-0.1.schema.json",
+  "title": "Commit Evidence Record 0.1",
+  "type": "object",
+  "required": [
+    "docket_version",
+    "spec",
+    "trust",
+    "base",
+    "generator",
+    "redaction",
+    "sessions",
+    "hunks",
+    "totals",
+    "commit",
+    "payload_digest"
+  ],
+  "properties": {
+    "docket_version": {
+      "const": "0.1"
+    },
+    "spec": {
+      "const": "CER/0.1"
+    },
+    "trust": {
+      "enum": [
+        "local_claimed",
+        "ci_attested"
+      ]
+    },
+    "base": {
+      "type": "string"
+    },
+    "commit": {
+      "type": "string",
+      "description": "empty while the change is still staged"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "payload_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "generator": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "required": [
+        "version",
+        "mode"
+      ],
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "rules_fired": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "required": [
+        "alg",
+        "key_id",
+        "sig"
+      ],
+      "properties": {
+        "alg": {
+          "const": "ed25519"
+        },
+        "key_id": {
+          "type": "string"
+        },
+        "sig": {
+          "type": "string",
+          "pattern": "^[0-9a-f]+$"
+        },
+        "public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "signer": {
+          "enum": [
+            "local",
+            "ci"
+          ]
+        }
+      }
+    },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "harness_version": {
+            "type": "string"
+          },
+          "started": {
+            "type": "string"
+          },
+          "ended": {
+            "type": "string"
+          },
+          "edits": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "observed_edits": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "commands": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lossy_edits": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "hunks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/hunk"
+      }
+    },
+    "totals": {
+      "type": "object",
+      "required": [
+        "files",
+        "hunks",
+        "added_lines"
+      ],
+      "properties": {
+        "files": {
+          "type": "integer"
+        },
+        "hunks": {
+          "type": "integer"
+        },
+        "added_lines": {
+          "type": "integer"
+        },
+        "attributed_lines": {
+          "type": "integer"
+        },
+        "verified_lines": {
+          "type": "integer"
+        },
+        "unknown_hunks": {
+          "type": "integer"
+        },
+        "zero_evidence_hunks": {
+          "type": "integer"
+        },
+        "zero_evidence_lines": {
+          "type": "integer"
+        },
+        "mean_evidence_density": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "hunk": {
+      "type": "object",
+      "required": [
+        "file",
+        "range",
+        "origin",
+        "human_contact",
+        "added_lines",
+        "attribution_confidence",
+        "evidence_density"
+      ],
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "range": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "commit": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "contributors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "agent_id": {
+                "type": "string"
+              },
+              "session": {
+                "type": "string"
+              },
+              "tool": {
+                "type": "string"
+              },
+              "lines": {
+                "type": "integer"
+              },
+              "at": {
+                "type": "string"
+              },
+              "task": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "attempts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "summary",
+              "outcome"
+            ],
+            "properties": {
+              "summary": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "abandoned",
+                  "superseded"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "lines": {
+                "type": "integer"
+              },
+              "at": {
+                "type": "string"
+              },
+              "sample": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "human_contact": {
+          "enum": [
+            "none",
+            "edited",
+            "approved",
+            "viewed"
+          ]
+        },
+        "added_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "attributed_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "verified_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "attribution_confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "none"
+          ]
+        },
+        "evidence_density": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "unknown": {
+          "type": "object",
+          "required": [
+            "reasons"
+          ],
+          "properties": {
+            "reasons": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "propertyNames": {
+                "enum": [
+                  "pre_existing",
+                  "untracked_mutation",
+                  "human_edit",
+                  "lossy_edit",
+                  "not_in_timeline"
+                ]
+              }
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "command"
+                ],
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": "string"
+                  },
+                  "at": {
+                    "type": "string"
+                  },
+                  "path_mentioned": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "origin": {
+                "properties": {
+                  "actor": {
+                    "const": "unknown"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "origin": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "agent_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "model"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "origin": {
+      "type": "object",
+      "required": [
+        "actor"
+      ],
+      "properties": {
+        "actor": {
+          "enum": [
+            "agent",
+            "human",
+            "unknown"
+          ]
+        },
+        "agent_id": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "task": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "observed",
+            "transcript"
+          ]
+        },
+        "at": {
+          "type": "string"
+        },
+        "intent": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "kind",
+        "ref",
+        "result",
+        "observed_after_edit"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "test_execution",
+            "coverage",
+            "typecheck",
+            "static_check"
+          ]
+        },
+        "ref": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "transitioned": {
+          "type": "boolean"
+        },
+        "observed_after_edit": {
+          "type": "boolean"
+        },
+        "covered_lines": {
+          "type": "integer"
+        },
+        "total_lines": {
+          "type": "integer"
+        },
+        "confidence": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

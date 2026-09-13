@@ -1,0 +1,21 @@
+# Docket reviewing its own pull requests. The records come from the developer
+# machines that made the commits, pushed with `docket push`.
+name: Docket
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./action
+        with:
+          version: main

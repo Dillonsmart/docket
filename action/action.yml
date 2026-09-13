@@ -1,0 +1,110 @@
+name: Docket evidence review
+description: Reorder a pull request by how little verification evidence stands behind each hunk.
+author: Docket
+
+branding:
+  icon: file-text
+  color: purple
+
+inputs:
+  version:
+    description: Version of docket to install (a tag, branch or commit).
+    default: main
+  base:
+    description: Base revision. Defaults to the pull request's base.
+    default: ""
+  head:
+    description: Head revision. Defaults to the pull request's head.
+    default: ""
+  comment:
+    description: Post the review as a pull request comment, updating the previous one.
+    default: "true"
+  fail-under:
+    description: Fail the job if any hunk's evidence density is below this (0-1). Empty disables the gate.
+    default: ""
+  github-token:
+    description: Token used to read and write the pull request comment.
+    default: ${{ github.token }}
+
+outputs:
+  markdown-path:
+    description: Path of the rendered review.
+    value: ${{ steps.review.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: "1.25"
+        cache: false
+
+    - name: Install docket
+      shell: bash
+      run: go install github.com/Dillonsmart/docket/cmd/docket@${{ inputs.version }}
+
+    - name: Fetch evidence records
+      shell: bash
+      # Orphan refs are not fetched by default, and the records are the whole
+      # input to this job: without them there is nothing to review.
+      run: |
+        git fetch --no-tags origin '+refs/docket/*:refs/docket/*' || \
+          echo "::warning::no refs/docket/* on the remote — has anyone run 'docket push'?"
+
+    - name: Review
+      id: review
+      shell: bash
+      env:
+        BASE: ${{ inputs.base }}
+        HEAD: ${{ inputs.head }}
+      run: |
+        set -euo pipefail
+        BASE="${BASE:-${{ github.event.pull_request.base.sha }}}"
+        HEAD="${HEAD:-${{ github.event.pull_request.head.sha }}}"
+        if [ -z "$BASE" ] || [ -z "$HEAD" ]; then
+          echo "::error::no base/head to review; pass them as inputs outside a pull request"
+          exit 1
+        fi
+        git fetch --no-tags origin "$BASE" "$HEAD" 2>/dev/null || true
+        ARGS=(review --range "$BASE..$HEAD" --format md --out docket-review.md --repo "${{ github.repository }}")
+        if [ -n "${{ inputs.fail-under }}" ]; then
+          ARGS+=(--fail-under "${{ inputs.fail-under }}")
+        fi
+        set +e
+        docket "${ARGS[@]}" > /dev/null
+        STATUS=$?
+        set -e
+        echo "path=docket-review.md" >> "$GITHUB_OUTPUT"
+        echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+        cat docket-review.md >> "$GITHUB_STEP_SUMMARY"
+        # Exit code 3 is the policy gate; report it after the comment is posted.
+        if [ "$STATUS" -ne 0 ] && [ "$STATUS" -ne 3 ]; then exit "$STATUS"; fi
+
+    - name: Comment on the pull request
+      if: ${{ inputs.comment == 'true' && github.event.pull_request.number }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        # One comment per pull request, updated in place: a new comment on every
+        # push turns the review into noise and gets muted.
+        EXISTING=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+          --jq 'map(select(.body | contains("<!-- docket:evidence -->"))) | .[0].id // empty')
+        if [ -n "$EXISTING" ]; then
+          gh api -X PATCH "repos/$REPO/issues/comments/$EXISTING" -F body=@docket-review.md > /dev/null
+        else
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@docket-review.md > /dev/null
+        fi
+
+    - name: Apply the evidence policy
+      if: ${{ inputs.fail-under != '' }}
+      shell: bash
+      run: |
+        if [ "${{ steps.review.outputs.status }}" = "3" ]; then
+          echo "::error::hunks below the required evidence density of ${{ inputs.fail-under }}"
+          exit 1
+        fi

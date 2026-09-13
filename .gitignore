@@ -1,0 +1,17 @@
+# Build output
+/docket
+/dist/
+*.test
+
+# Coverage and profiling
+coverage/
+*.out
+*.prof
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+
+# The working plan behind this project is not part of it
+docket-project-plan.md
