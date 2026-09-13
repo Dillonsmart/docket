@@ -1,6 +1,7 @@
 package timeline
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -143,5 +144,106 @@ func TestEditsOutsideTheRepositoryAreIgnored(t *testing.T) {
 	tl := Build("/repo", []*transcript.Session{session(e)})
 	if len(tl.Files) != 0 {
 		t.Errorf("expected no files, got %v", tl.Files)
+	}
+}
+
+// Patch-based agents (Codex, opencode) record no pre-image, so the replay has
+// to start from the file as the base revision left it.
+func TestSeedLetsAPatchOnlyEditReplay(t *testing.T) {
+	base := []string{"one", "two", "three"}
+	e := &transcript.FileEdit{
+		ID: "p1", Tool: "apply_patch", Path: "/repo/a.go", Sequence: 1, At: at(1),
+		Actor: transcript.ActorAgent, SessionID: "s1",
+		Patch: []transcript.EditOp{{
+			OldText: []string{"two"},
+			NewText: []string{"two", "two and a half"},
+		}},
+	}
+	tl := BuildWith("/repo", []*transcript.Session{session(e)}, Options{
+		Seed: func(path string) ([]string, bool) { return base, true },
+	})
+	ft := tl.EditsFor("a.go")
+	if ft == nil || len(ft.Lossy) != 0 {
+		t.Fatalf("edit could not be replayed: %+v", ft)
+	}
+	if got := strings.Join(ft.Lines, "|"); got != "one|two|two and a half|three" {
+		t.Fatalf("replayed content = %q", got)
+	}
+	if !ft.Prov[2].Known() || ft.Prov[2].EditID != "p1" {
+		t.Errorf("the added line should belong to the patch: %+v", ft.Prov[2])
+	}
+	if ft.Prov[0].Known() {
+		t.Errorf("a line that was already there must not be credited to the edit: %+v", ft.Prov[0])
+	}
+}
+
+// Without the base content there is nothing to apply a patch to, and inventing
+// one would be the worst possible answer.
+func TestPatchWithoutSeedIsLossyNotGuessed(t *testing.T) {
+	e := &transcript.FileEdit{
+		ID: "p1", Tool: "apply_patch", Path: "/repo/a.go", Sequence: 1, At: at(1),
+		Actor: transcript.ActorAgent, SessionID: "s1",
+		Patch: []transcript.EditOp{{OldText: []string{"two"}, NewText: []string{"TWO"}}},
+	}
+	tl := BuildWith("/repo", []*transcript.Session{session(e)}, Options{})
+	ft := tl.EditsFor("a.go")
+	if ft == nil || len(ft.Lossy) != 1 {
+		t.Fatalf("expected the edit to be recorded as lossy, got %+v", ft)
+	}
+}
+
+// An edit written against the base rather than against the replay still counts,
+// but re-seeding is a divergence and must be reported as one.
+func TestEditAgainstTheBaseReSeedsAndRecordsDrift(t *testing.T) {
+	base := []string{"alpha", "beta"}
+	first := &transcript.FileEdit{
+		ID: "e1", Tool: "Write", Path: "/repo/a.go", Sequence: 1, At: at(1),
+		Post: []string{"something", "entirely", "different"}, HasPost: true, HasPre: true,
+		Actor: transcript.ActorAgent, SessionID: "s1",
+	}
+	// This one only makes sense against the base content.
+	second := &transcript.FileEdit{
+		ID: "e2", Tool: "apply_patch", Path: "/repo/a.go", Sequence: 2, At: at(2),
+		Actor: transcript.ActorAgent, SessionID: "s1",
+		Patch: []transcript.EditOp{{OldText: []string{"beta"}, NewText: []string{"beta", "gamma"}}},
+	}
+	tl := BuildWith("/repo", []*transcript.Session{session(first, second)}, Options{
+		Seed: func(path string) ([]string, bool) { return base, true },
+	})
+	ft := tl.EditsFor("a.go")
+	if len(ft.Lossy) != 0 {
+		t.Fatalf("edit was given up on: %+v", ft.Lossy)
+	}
+	if got := strings.Join(ft.Lines, "|"); got != "alpha|beta|gamma" {
+		t.Fatalf("content = %q", got)
+	}
+	if len(ft.Drifts) != 1 {
+		t.Errorf("re-seeding from the base is a divergence and should be recorded: %+v", ft.Drifts)
+	}
+	if !ft.Prov[2].Known() || ft.Prov[2].EditID != "e2" {
+		t.Errorf("the added line = %+v", ft.Prov[2])
+	}
+}
+
+// A substring swap is how most edit tools describe themselves; the replay has
+// to apply it to whatever the file actually said at the time.
+func TestReplacementEditAppliesToTheReplayedContent(t *testing.T) {
+	first := &transcript.FileEdit{
+		ID: "e1", Tool: "write", Path: "/repo/a.go", Sequence: 1, At: at(1),
+		Post: []string{"const a = 1;"}, HasPost: true, HasPre: true, Created: true,
+		Actor: transcript.ActorAgent, SessionID: "s1",
+	}
+	second := &transcript.FileEdit{
+		ID: "e2", Tool: "edit", Path: "/repo/a.go", Sequence: 2, At: at(2),
+		Replace: &transcript.Replacement{Old: "const a = 1;", New: "const a = 2;"},
+		Actor:   transcript.ActorAgent, SessionID: "s1",
+	}
+	tl := BuildWith("/repo", []*transcript.Session{session(first, second)}, Options{})
+	ft := tl.EditsFor("a.go")
+	if len(ft.Lines) != 1 || ft.Lines[0] != "const a = 2;" {
+		t.Fatalf("content = %v", ft.Lines)
+	}
+	if ft.Prov[0].EditID != "e2" {
+		t.Errorf("the rewritten line belongs to the second edit, got %+v", ft.Prov[0])
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Dillonsmart/docket/internal/agents"
+	"github.com/Dillonsmart/docket/internal/agents/codex"
 	"github.com/Dillonsmart/docket/internal/cer"
 	"github.com/Dillonsmart/docket/internal/collect"
 	"github.com/Dillonsmart/docket/internal/evidence"
@@ -72,25 +74,30 @@ func cmdDoctor(env *env, args []string) error {
 	digests, _ := store.List(repo)
 	fmt.Fprintf(out, "records      %d stored on %s\n", len(digests), cer.Ref)
 
-	// Transcripts.
+	// Agent sessions.
 	fmt.Fprintln(out)
-	paths, err := transcript.Find(repo.Root)
-	if err != nil {
-		fmt.Fprintf(out, "transcripts  cannot look: %v\n", err)
-	} else if len(paths) == 0 {
-		fmt.Fprintf(out, "transcripts  none found under %s\n", transcript.ProjectsDir())
+	sessions, problems := agents.Discover(repo.Root)
+	if len(sessions) == 0 {
+		fmt.Fprintf(out, "sessions     none found for this repository\n")
+		fmt.Fprintf(out, "             docket looks in %s (Claude Code), %s (Codex) and the opencode database\n",
+			transcript.ProjectsDir(), filepath.Join(codex.Home(), "sessions"))
 	}
-	for _, p := range paths {
-		s, stats, err := transcript.Parse(p)
-		if err != nil {
-			fmt.Fprintf(out, "transcript   %s unreadable: %v\n", filepath.Base(p), err)
-			continue
-		}
-		fmt.Fprintf(out, "transcript   %s  %d edits, %d commands, %d prompts\n", short(s.ID), len(s.Edits), len(s.Commands), len(s.Prompts))
-		if stats.Unparsable > 0 || stats.EditsRecovered > 0 || stats.ResultsOrphaned > 0 || stats.OversizeLines > 0 {
+	byAgent := map[string]int{}
+	for _, f := range sessions {
+		s := f.Session
+		byAgent[s.Agent]++
+		fmt.Fprintf(out, "session      %-14s %s  %d edits, %d commands, %d prompts\n",
+			s.Agent, short(s.ID), len(s.Edits), len(s.Commands), len(s.Prompts))
+		st := f.Stats
+		if st.Unparsable > 0 || st.EditsRecovered > 0 || st.ResultsOrphaned > 0 || st.OversizeLines > 0 {
 			fmt.Fprintf(out, "             lossy: %d unparsable lines, %d oversize, %d edits without images, %d results with no call\n",
-				stats.Unparsable, stats.OversizeLines, stats.EditsRecovered, stats.ResultsOrphaned)
+				st.Unparsable, st.OversizeLines, st.EditsRecovered, st.ResultsOrphaned)
 		}
+	}
+	for _, p := range problems {
+		// A source docket cannot read is worth shouting about: it looks exactly
+		// like an agent that never wrote anything.
+		fmt.Fprintf(out, "session      %-14s COULD NOT READ: %s\n", p.Agent, p.Detail)
 	}
 
 	// Collector.

@@ -364,6 +364,11 @@ var mutators = []struct {
 	{"interpreter-script", regexp.MustCompile(`\b(?:python3?|node|ruby|php)\s+-\b|\b(?:python3?|node)\s+<<`)},
 }
 
+// ClassifyCommand works out whether a command was a check and how it went. It
+// is exported because every agent's collector needs the same reading of the
+// same shell commands.
+func ClassifyCommand(c *Command) { classifyCommand(c) }
+
 func classifyCommand(c *Command) {
 	out := c.Stdout + "\n" + c.Stderr
 	for _, r := range runners {
@@ -371,7 +376,13 @@ func classifyCommand(c *Command) {
 			continue
 		}
 		t := &TestRun{Runner: r.name, Outcome: "unknown", Confidence: "output_pattern"}
-		code, hasCode := reportedExitCode(c.Command, out)
+		code, hasCode := 0, false
+		if c.ExitCode != nil {
+			// An exit status the harness recorded itself is the last word.
+			code, hasCode = *c.ExitCode, true
+		} else {
+			code, hasCode = reportedExitCode(c.Command, out)
+		}
 		switch {
 		case c.Interrupted:
 			t.Outcome = "unknown"

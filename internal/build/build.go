@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Dillonsmart/docket/internal/agents"
 	"github.com/Dillonsmart/docket/internal/attribute"
 	"github.com/Dillonsmart/docket/internal/cer"
 	"github.com/Dillonsmart/docket/internal/collect"
@@ -110,7 +111,10 @@ func Build(o Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	tl := timeline.BuildUntil(repo.Root, sessions, commitAt)
+	tl := timeline.BuildWith(repo.Root, sessions, timeline.Options{
+		Cutoff: commitAt,
+		Seed:   seedFrom(repo, base),
+	})
 
 	var cov *evidence.Coverage
 	if !o.NoCoverage {
@@ -383,30 +387,35 @@ func candidates(tl *timeline.Timeline, h attribute.Hunk, base string, commitAt t
 // record builder and the gate measurement go through here, so they can never
 // disagree about what was known.
 func LoadSessions(repo *gitx.Repo, override []string) ([]*transcript.Session, []cer.Session, error) {
-	paths := override
-	if len(paths) == 0 {
-		found, err := transcript.Find(repo.Root)
-		if err == nil {
-			paths = found
-		}
-	}
 	var sessions []*transcript.Session
 	var info []cer.Session
 
-	for _, p := range paths {
-		s, stats, err := transcript.Parse(p)
-		if err != nil {
-			continue
+	if len(override) > 0 {
+		// An explicit path is always read as a Claude Code transcript: it is the
+		// only agent whose sessions are addressed by file.
+		for _, p := range override {
+			s, stats, err := transcript.Parse(p)
+			if err != nil {
+				continue
+			}
+			sessions = append(sessions, s)
+			info = append(info, sessionInfo(s, stats))
 		}
-		if len(s.Edits) == 0 && len(s.Commands) == 0 {
-			continue
+	} else {
+		discovered, problems := agents.Discover(repo.Root)
+		for _, p := range problems {
+			// A source docket could not read is not the same as an agent that
+			// wrote nothing, and the record should not imply otherwise.
+			info = append(info, cer.Session{ID: p.Agent + ":unreadable", Agent: p.Agent, Unreadable: p.Detail})
 		}
-		sessions = append(sessions, s)
-		info = append(info, cer.Session{
-			ID: s.ID, Agent: "claude-code", Model: s.Model, Harness: s.Version,
-			Started: stamp(s.Started), Ended: stamp(s.Ended),
-			Edits: len(s.Edits), Commands: len(s.Commands), Lossy: stats.EditsRecovered,
-		})
+		for _, f := range discovered {
+			s := f.Session
+			if len(s.Edits) == 0 && len(s.Commands) == 0 {
+				continue
+			}
+			sessions = append(sessions, s)
+			info = append(info, sessionInfo(s, f.Stats))
+		}
 	}
 
 	// Collector events: edits docket observed itself, including everything the
@@ -428,6 +437,29 @@ func LoadSessions(repo *gitx.Repo, override []string) ([]*transcript.Session, []
 	}
 	sort.SliceStable(info, func(i, j int) bool { return info[i].ID < info[j].ID })
 	return sessions, info, nil
+}
+
+// seedFrom lets the replay start from the file as it was before this change.
+//
+// Agents that send patches rather than whole files — Codex, opencode — record
+// no pre-image, so without this their first edit to a file could not be
+// replayed at all.
+func seedFrom(repo *gitx.Repo, base string) func(string) ([]string, bool) {
+	return func(path string) ([]string, bool) {
+		data, ok := repo.FileAt(base, path)
+		if !ok {
+			return nil, false
+		}
+		return diffx.SplitLines(string(data)), true
+	}
+}
+
+func sessionInfo(s *transcript.Session, stats transcript.ParseStats) cer.Session {
+	return cer.Session{
+		ID: s.ID, Agent: s.Agent, Model: s.Model, Harness: s.Version,
+		Started: stamp(s.Started), Ended: stamp(s.Ended),
+		Edits: len(s.Edits), Commands: len(s.Commands), Lossy: stats.EditsRecovered,
+	}
 }
 
 func headContent(repo *gitx.Repo, rev string, staged bool, path string) []string {

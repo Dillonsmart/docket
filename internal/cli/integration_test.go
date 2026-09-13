@@ -185,8 +185,11 @@ func TestReviewFailsUnderAThreshold(t *testing.T) {
 	}
 }
 
-// A commit made with --no-verify has no record. Silence is the honest answer;
-// inventing one after the fact would defeat the point.
+// A commit made with the hooks disabled has no record. Silence is the honest
+// answer; inventing one after the fact would defeat the point.
+//
+// Note that --no-verify is not how you get here: git bypasses pre-commit and
+// commit-msg with that flag, but still runs prepare-commit-msg.
 func TestCommitWithoutTheHookHasNoRecord(t *testing.T) {
 	h := newHarness(t)
 	if _, code := h.run("", "init"); code != 0 {
@@ -194,7 +197,7 @@ func TestCommitWithoutTheHookHasNoRecord(t *testing.T) {
 	}
 	h.write("src/y.js", "export const y = 2;\n")
 	h.git("add", "-A")
-	h.git("commit", "-q", "--no-verify", "-m", "feat: y")
+	h.git("-c", "core.hooksPath="+filepath.Join(h.dir, "no-hooks"), "commit", "-q", "-m", "feat: y")
 	if _, code := h.run("", "hook", "post-commit"); code != 0 {
 		t.Fatal("post-commit should not fail on an untracked commit")
 	}

@@ -169,7 +169,16 @@ func measure(repo *gitx.Repo, sessions []*transcript.Session, rev string) (*Comm
 		return nil, attribute.Summary{}, err
 	}
 	when, _ := time.Parse(time.RFC3339, c.When)
-	tl := timeline.BuildUntil(repo.Root, sessions, when)
+	tl := timeline.BuildWith(repo.Root, sessions, timeline.Options{
+		Cutoff: when,
+		Seed: func(path string) ([]string, bool) {
+			data, ok := repo.FileAt(base, path)
+			if !ok {
+				return nil, false
+			}
+			return diffx.SplitLines(string(data)), true
+		},
+	})
 
 	var sum attribute.Summary
 	res := &CommitResult{SHA: c.SHA, Subject: c.Subject, When: c.When}

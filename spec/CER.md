@@ -18,7 +18,7 @@ These are the constraints every part of the format follows. An implementation th
 
 **R1 — Unknown is a valid answer, and the only honest one when nothing is established.** A record must never attribute a line by proximity, timing or likelihood. Attribution requires recorded content that matches the committed line.
 
-**R2 — Evidence is graded by what produced it.** A record states whether an edit was *observed* (the producer read the file before and after) or *reported* (an agent harness said so), and whether the record was built on a developer machine or by CI.
+**R2 — Evidence is graded by what produced it.** A record states whether an edit was *observed* (the producer read the file before and after) or *reported* (an agent harness said so), and whether the record was built on a developer machine or by CI. It also names the agent that wrote the code, which is a different question from which model did.
 
 **R3 — The record is content-addressed, not location-addressed.** A commit refers to its record by digest. No URL, no vendor, no service that has to still exist.
 
@@ -71,6 +71,8 @@ A record is a single JSON object. Unknown members must be preserved by consumers
 
 `actor` is `agent`, `human` or `unknown`. For an agent: `agent_id`, `model`, `session`, `task` (the request this descends from), `tool`, `at`, `intent` (what the agent said it was doing), and `command` for shell-driven edits.
 
+`agent_id` is `<harness>/<role>` — `claude-code/main`, `claude-code/subagent`, `codex/main`, `opencode/main` — and the session it belongs to carries the harness name in `sessions[].agent`. An implementation must not invent a role it cannot establish: a harness that does not record which subagent definition ran says `subagent`, not a name.
+
 `source` is `observed` or `transcript` (R2).
 
 A record must not populate `agent_id` or `model` when `actor` is `unknown`.
@@ -84,6 +86,8 @@ A record must not populate `agent_id` or `model` when `actor` is `unknown`.
 `{kind, ref, result, transitioned, observed_after_edit, covered_lines, total_lines, confidence, at}`.
 
 `kind` is `test_execution`, `coverage`, `typecheck` or `static_check`. `observed_after_edit` states whether the check ran after the code was written; a check that ran before it is not evidence about it. `transitioned` means the check failed before this change and passes after — a much stronger signal than a suite that was always green.
+
+An implementation that reads a harness recording only patches (no pre-image) must resolve them against the content the edit ran against — normally the base revision — and must not place a hunk whose context cannot be found.
 
 ### 2.5 Unknown
 

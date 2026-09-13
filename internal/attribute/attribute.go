@@ -234,17 +234,39 @@ func newVerifier(edits timeline.EditByID) *verifier {
 func (v *verifier) contains(editID, line string) bool {
 	set, ok := v.sets[editID]
 	if !ok {
-		e := v.edits[editID]
-		set = map[string]struct{}{}
-		if e != nil {
-			for _, l := range e.Post {
-				set[l] = struct{}{}
-			}
-		}
+		set = writtenLines(v.edits[editID])
 		v.sets[editID] = set
 	}
 	_, found := set[line]
 	return found
+}
+
+// writtenLines is every line an edit is recorded as having written.
+//
+// A whole-file write records its post-image. Patch-based agents record only the
+// lines they added, and a substring edit records only the replacement text —
+// all three are recorded content, so all three can verify an attribution. What
+// is never allowed is verifying against the replay's own reconstruction, which
+// would be the engine marking its own homework.
+func writtenLines(e *transcript.FileEdit) map[string]struct{} {
+	set := map[string]struct{}{}
+	if e == nil {
+		return set
+	}
+	for _, l := range e.Post {
+		set[l] = struct{}{}
+	}
+	for _, op := range e.Patch {
+		for _, l := range op.NewText {
+			set[l] = struct{}{}
+		}
+	}
+	if e.Replace != nil {
+		for _, l := range diffx.SplitLines(e.Replace.New) {
+			set[l] = struct{}{}
+		}
+	}
+	return set
 }
 
 // Summary aggregates attribution across a commit, which is what the Phase 1

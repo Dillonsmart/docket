@@ -103,8 +103,12 @@ func postCommit(repo *gitx.Repo) error {
 	}
 	digest, ok := repo.Trailer(sha, cer.Trailer)
 	if !ok || digest == "" {
-		// The commit was made with --no-verify, or by something that bypassed the
-		// hook. Recording nothing is the honest outcome.
+		// prepare-commit-msg did not run: hooks disabled, a core.hooksPath
+		// pointing elsewhere, or a commit made by a tool that writes its own
+		// message. Recording nothing is the honest outcome.
+		//
+		// --no-verify is not one of these cases: git bypasses pre-commit and
+		// commit-msg with that flag and still runs prepare-commit-msg.
 		return nil
 	}
 	rec, err := store.LoadPending(repo, digest)

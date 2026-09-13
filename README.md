@@ -126,6 +126,17 @@ A line is attributed only when its text is found at the aligned position *and* i
 
 When an edit's recorded pre-image disagrees with the replay — because a shell command, an editor or a person changed the file in between — the disagreement is detected, the affected lines become `unknown`, and the replay re-seeds from the recorded truth. Carrying a reconstruction past a disagreement is how tools produce confident, wrong answers. **An attribution engine that is confidently wrong is worse than no product**, so `unknown` is always an available answer, and it always comes with a reason.
 
+**Agents.** Docket reads Claude Code, Codex CLI and opencode. Everything downstream — replay, attribution, evidence, the record — is agent-agnostic, so supporting another agent is a reader, not a redesign:
+
+| Agent | Where its session lives | What docket gets from it |
+|---|---|---|
+| Claude Code | `~/.claude/projects/**/*.jsonl` | Edit/Write calls with before and after images, shell commands, prompts, the agent's own narration |
+| Codex CLI | `~/.codex/sessions/**/rollout-*.jsonl` | `apply_patch` calls, shell commands **with exit codes**, prompts, narration |
+| opencode | `~/.local/share/opencode/opencode.db` (needs `sqlite3`) | write/edit calls with diffs, shell commands **with exit codes**, prompts, narration |
+| anything else | — | wire its hooks to `docket collect pre` / `docket collect post` and the edits are observed directly |
+
+Codex and opencode send patches rather than whole files, so their edits carry no before-image. Docket seeds the replay from the base revision and applies the patch to the content it was actually written against; when that does not fit, it re-seeds and marks what it cannot explain rather than placing the hunk by guesswork.
+
 **Observation.** Reading the transcript recovers `Edit` and `Write` calls. An agent that writes files through the shell — a heredoc, `sed -i`, a generator, a formatter — leaves nothing there to recover. So docket watches the working tree itself: a `PreToolUse` hook snapshots content, a `PostToolUse` hook diffs it, and both images are stored as git blobs. Those edits are marked `observed` rather than `transcript`, because docket read them itself.
 
 **Evidence.** Test runs, type checks and static analysis are correlated with the edits they followed — a check that ran *before* the code was written is not evidence about it. Coverage reports (istanbul `coverage-final.json`, lcov) are matched line by line against the hunk, and ignored when the report is older than the code it would otherwise appear to cover.
@@ -140,14 +151,16 @@ Those caps are the point. This number will be turned into a target, exactly as c
 
 Docket measures itself. `docket gate` replays real sessions against real commits and reports what it could and could not explain:
 
-| Repository | Hunks in files the session edited | Added lines | Content-verified |
-|---|---|---|---|
-| A Laravel engine built with the Edit/Write tools (4 commits, 98 edits) | **96.2%** | 99.6% | 100% |
-| A PHP framework built largely through the shell (12 commits, 79 edits) | **59.2%** | 82.1% | 100% |
+| Session | Agent | Hunks in files the session edited | Added lines | Content-verified |
+|---|---|---|---|---|
+| A Laravel engine, Edit/Write tools (4 commits, 98 edits) | Claude Code | **98.1%** | 99.8% | 100% |
+| A Python app, `apply_patch` (4 commits, 256 edits) | Codex CLI | **94.7%** | 95.7% | 99.8% |
+| A FastAPI project, 100 edits (uncommitted, measured against the working tree) | opencode | — | **92.9%** | — |
+| A PHP framework built largely through the shell (12 commits, 79 edits) | Claude Code | 59.2% | 82.1% | 100% |
 
-Two things to take from this. Every attribution docket made was verified against the crediting edit's own recorded output — it did not credit a single line to an edit that did not write it. And the second row is why the collector exists: those sessions wrote files with heredocs and `sed`, which the transcript does not record, and that work happened before docket could observe it. With `docket init` in place, those edits are observed directly.
+Two things to take from this. Every attribution was verified against the crediting edit's own recorded output — docket did not credit a line to an edit that did not write it. And the last row is why the collector exists: those sessions wrote files with heredocs and `sed`, which no transcript records, and that work happened before docket could observe it. With `docket init` in place, those edits are observed directly.
 
-Across whole diffs the headline rate is lower — 40% and 37% — because real commits contain `composer.lock`, scaffolded models and generated code that no agent edit ever touched. Docket reports those as `unknown` with the commands that ran nearby listed as *candidates*, never as attributions. That is the honest answer, and it is deliberately not smoothed into the number.
+Across whole diffs the headline rate is lower — 40%, 94%, 37% — because real commits also contain `composer.lock`, scaffolded models and generated code that no agent edit ever touched. Docket reports those as `unknown` with the commands that ran nearby listed as *candidates*, never as attributions. That is the honest answer, and it is deliberately not smoothed into the number.
 
 Run it on your own history:
 
@@ -191,7 +204,7 @@ The record format is specified separately as the [**Commit Evidence Record**](sp
 
 Built and working: attribution, the shell-edit collector, redaction, signed records on an orphan ref, coverage and test correlation, the terminal viewer, `explain`, the pull request comment, the GitHub Action, and the self-measurement gate.
 
-Not built yet: collectors for other agents (Codex, Gemini, anything ACP-native), coverage correlation beyond istanbul/lcov, GitLab, cross-repository aggregation, policy gates on paths, and the hosted team tier.
+Not built yet: readers for Gemini CLI and anything ACP-native, coverage correlation beyond istanbul/lcov, GitLab, cross-repository aggregation, policy gates on paths, and the hosted team tier.
 
 ## Licence
 

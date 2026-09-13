@@ -101,6 +101,9 @@ type Session struct {
 	// published rather than hidden: it is the honest measure of how much of the
 	// journey survived.
 	Lossy int `json:"lossy_edits"`
+	// Unreadable is set when docket found a source it could not read, so a
+	// reader can tell "this agent wrote nothing" from "docket could not look".
+	Unreadable string `json:"unreadable,omitempty"`
 }
 
 // Hunk is the evidence record for one diff hunk.

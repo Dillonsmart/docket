@@ -143,9 +143,24 @@ func Merge(sessions []*transcript.Session) []transcript.Event {
 	return all
 }
 
+// Options configure a replay.
+type Options struct {
+	// Cutoff drops events after a moment (zero means everything). See
+	// BuildUntil for why this matters.
+	Cutoff time.Time
+	// Seed supplies a file's content before the session touched it, normally
+	// read from the base revision.
+	//
+	// Not every agent records a pre-image: Codex and opencode send patches, not
+	// whole files. Without a seed those edits can only be replayed from the
+	// first whole-file write onwards; with one, a patch can be applied to the
+	// content it was actually written against.
+	Seed func(path string) ([]string, bool)
+}
+
 // Build replays a stream of events against a repository root.
 func Build(root string, sessions []*transcript.Session) *Timeline {
-	return BuildUntil(root, sessions, time.Time{})
+	return BuildWith(root, sessions, Options{})
 }
 
 // CutoffGrace widens the cutoff by one second.
@@ -163,9 +178,14 @@ const CutoffGrace = time.Second
 // edits could credit a line to an edit that had not happened yet, simply because
 // it wrote the same text.
 func BuildUntil(root string, sessions []*transcript.Session, cutoff time.Time) *Timeline {
+	return BuildWith(root, sessions, Options{Cutoff: cutoff})
+}
+
+// BuildWith replays with the full set of options.
+func BuildWith(root string, sessions []*transcript.Session, o Options) *Timeline {
 	tl := &Timeline{Files: map[string]*FileTimeline{}, Edits: EditByID{}, Sessions: sessions}
 	events := Merge(sessions)
-	if !cutoff.IsZero() {
+	if cutoff := o.Cutoff; !cutoff.IsZero() {
 		limit := cutoff.Add(CutoffGrace)
 		kept := events[:0]
 		for _, ev := range events {
@@ -178,6 +198,24 @@ func BuildUntil(root string, sessions []*transcript.Session, cutoff time.Time) *
 
 	// Mutating commands since the last recorded edit, used to explain drift.
 	var openMutations []string
+
+	// Base content is read at most once per file.
+	seeds := map[string][]string{}
+	seed := func(path string) ([]string, bool) {
+		if o.Seed == nil {
+			return nil, false
+		}
+		if lines, ok := seeds[path]; ok {
+			return lines, lines != nil
+		}
+		lines, ok := o.Seed(path)
+		if !ok {
+			seeds[path] = nil
+			return nil, false
+		}
+		seeds[path] = lines
+		return lines, true
+	}
 
 	for _, ev := range events {
 		switch e := ev.(type) {
@@ -205,15 +243,31 @@ func BuildUntil(root string, sessions []*transcript.Session, cutoff time.Time) *
 			if e.UserModified {
 				ft.HumanEdited = true
 			}
-			applyEdit(ft, e, openMutations)
+			applyEdit(ft, e, openMutations, seed)
 			openMutations = nil
 		}
 	}
 	return tl
 }
 
-func applyEdit(ft *FileTimeline, e *transcript.FileEdit, mutations []string) {
-	seeded := len(ft.Edits) == 1
+func applyEdit(ft *FileTimeline, e *transcript.FileEdit, mutations []string, seed func(string) ([]string, bool)) {
+	first := len(ft.Edits) == 1
+
+	// An edit that reports no pre-image can still be replayed if the file's
+	// content before the session is available, so take the seed before deciding
+	// the edit is unusable.
+	if first && !e.HasPre && seed != nil {
+		if base, ok := seed(ft.Path); ok {
+			ft.Lines = append([]string(nil), base...)
+			ft.Prov = make([]Origin, len(base))
+			ft.Anchors = make([][]int, len(base))
+			for i := range ft.Prov {
+				ft.Prov[i] = Origin{Reason: ReasonPreExisting}
+			}
+			first = false
+		}
+	}
+	seeded := first
 
 	// Step 1: reconcile the replay with the pre-image this edit actually saw.
 	if e.HasPre {
@@ -246,12 +300,34 @@ func applyEdit(ft *FileTimeline, e *transcript.FileEdit, mutations []string) {
 		ft.Lines, ft.Prov, ft.Anchors = nil, nil, nil
 	}
 
-	// Step 2: apply the post-image.
-	if !e.HasPost {
-		ft.Lossy = append(ft.Lossy, e.ID)
-		return
-	}
+	// Step 2: apply the post-image, or reconstruct it from what was recorded:
+	// a substring swap first, since it is exact, then the patch.
 	post := e.Post
+	if !e.HasPost {
+		rebuilt, ok := reconstruct(ft.Lines, e)
+		if !ok {
+			// The edit does not fit the replayed content. It may have been written
+			// against the file as it stood at the base revision — an edit from an
+			// earlier session, or one made either side of work docket never saw.
+			// Trying the base is worth it, but only as a re-seed: the lines that
+			// differ become unknown, exactly as any other divergence would.
+			if base, hasBase := seed(ft.Path); hasBase {
+				if fromBase, okBase := reconstruct(base, e); okBase {
+					dirty := reseed(ft, base, ReasonUntrackedMutation)
+					ft.Drifts = append(ft.Drifts, Drift{
+						Path: ft.Path, EditID: e.ID, At: e.At,
+						LinesDirty: dirty, Reason: ReasonUntrackedMutation, Hints: dedupe(mutations),
+					})
+					rebuilt, ok = fromBase, true
+				}
+			}
+		}
+		if !ok {
+			ft.Lossy = append(ft.Lossy, e.ID)
+			return
+		}
+		post = rebuilt
+	}
 	ops := diffx.Align(ft.Lines, post)
 	newProv := make([]Origin, len(post))
 	newAnchors := make([][]int, len(post)+1) // last slot is the file tail
@@ -320,6 +396,98 @@ func applyEdit(ft *FileTimeline, e *transcript.FileEdit, mutations []string) {
 	for i := range ft.Anchors {
 		ft.Anchors[i] = dedupeInts(ft.Anchors[i])
 	}
+}
+
+// reconstruct rebuilds an edit's post-image from what the harness recorded,
+// against a given version of the file.
+func reconstruct(content []string, e *transcript.FileEdit) ([]string, bool) {
+	if post, ok := applyReplacementTo(content, e.Replace); ok {
+		return post, true
+	}
+	return applyPatchTo(content, e.Patch)
+}
+
+// applyReplacementTo applies a recorded substring swap to the replayed content.
+//
+// The replay holds lines, not bytes, and a recorded old_string often ends with
+// a newline the line split threw away — so the text is tried both ways before
+// the edit is given up on.
+func applyReplacementTo(content []string, r *transcript.Replacement) ([]string, bool) {
+	if r == nil || r.Old == "" {
+		return nil, false
+	}
+	joined := strings.Join(content, "\n")
+	for _, text := range []string{joined, joined + "\n"} {
+		if !strings.Contains(text, r.Old) {
+			continue
+		}
+		if r.All {
+			return diffx.SplitLines(strings.ReplaceAll(text, r.Old, r.New)), true
+		}
+		return diffx.SplitLines(strings.Replace(text, r.Old, r.New, 1)), true
+	}
+	return nil, false
+}
+
+// applyPatchTo applies a recorded patch to the replayed content.
+//
+// Line numbers are used when the patch carries them and the text at that
+// position matches. Otherwise the hunk is located by its own context, which is
+// how patch-based agents describe an edit — they send the surrounding lines and
+// no numbers at all. A hunk whose context cannot be found is not applied:
+// guessing a location would attribute lines to the wrong place, which is worse
+// than admitting the edit could not be followed.
+func applyPatchTo(content []string, ops []transcript.EditOp) ([]string, bool) {
+	if len(ops) == 0 {
+		return nil, false
+	}
+	out := make([]string, 0, len(content)+16)
+	cursor := 0
+	for _, op := range ops {
+		at, ok := locate(content, op, cursor)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, content[cursor:at]...)
+		out = append(out, op.NewText...)
+		cursor = at + len(op.OldText)
+	}
+	out = append(out, content[cursor:]...)
+	return out, true
+}
+
+// locate finds where a hunk's old-side text sits in the content, at or after
+// the cursor.
+func locate(content []string, op transcript.EditOp, cursor int) (int, bool) {
+	if len(op.OldText) == 0 {
+		// A pure insertion needs a position, and only a line number can give one.
+		at := op.OldStart - 1
+		if at < cursor || at > len(content) {
+			return 0, false
+		}
+		return at, true
+	}
+	if at := op.OldStart - 1; at >= cursor && matchAt(content, op.OldText, at) {
+		return at, true
+	}
+	for i := cursor; i+len(op.OldText) <= len(content); i++ {
+		if matchAt(content, op.OldText, i) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func matchAt(content, want []string, at int) bool {
+	if at < 0 || at+len(want) > len(content) {
+		return false
+	}
+	for i, w := range want {
+		if content[at+i] != w {
+			return false
+		}
+	}
+	return true
 }
 
 func dedupeInts(in []int) []int {

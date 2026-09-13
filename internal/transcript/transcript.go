@@ -25,6 +25,18 @@ import (
 	"time"
 )
 
+// Agent names for the harnesses docket can read.
+const (
+	// AgentClaudeCode is Claude Code's session transcript.
+	AgentClaudeCode = "claude-code"
+	// AgentCodex is the Codex CLI's rollout file.
+	AgentCodex = "codex"
+	// AgentOpencode is opencode's session database.
+	AgentOpencode = "opencode"
+	// AgentCollector is docket watching the working tree itself.
+	AgentCollector = "docket-collector"
+)
+
 // Actor is who performed an action.
 type Actor string
 
@@ -39,7 +51,12 @@ const (
 
 // Session is one parsed transcript file.
 type Session struct {
-	ID       string
+	ID string
+	// Agent names the harness that produced this session: claude-code, codex,
+	// opencode, or docket's own collector. It is recorded in every docket,
+	// because "which agent wrote this" is a different question from "which
+	// model", and an organisation will want to ask both.
+	Agent    string
 	Path     string
 	CWD      string
 	Branch   string
@@ -74,6 +91,15 @@ type EditOp struct {
 	OldText, NewText   []string
 }
 
+// Replacement is an edit expressed as an exact substring swap, which is how
+// most edit tools describe themselves. It is the fallback when the harness
+// records what was swapped but not what the file looked like.
+type Replacement struct {
+	Old string
+	New string
+	All bool
+}
+
 // FileEdit is a recorded mutation of one file by one tool call.
 type FileEdit struct {
 	ID       string // the tool_use id: the stable identity of this edit
@@ -93,6 +119,10 @@ type FileEdit struct {
 	// Patch is the structured patch, always present for Edit and available for
 	// Write updates. It is the fallback when the images are missing.
 	Patch []EditOp
+	// Replace is the substring swap this edit performed, when that is all the
+	// harness recorded. The replay applies it to the content the edit actually
+	// ran against.
+	Replace *Replacement
 
 	Actor        Actor
 	AgentID      string
@@ -150,9 +180,13 @@ type Command struct {
 	Stdout      string
 	Stderr      string
 	Interrupted bool
-	Actor       Actor
-	SessionID   string
-	Model       string
+	// ExitCode is the process's exit status when the harness recorded one.
+	// Claude Code does not; Codex and opencode do, and a recorded exit code
+	// settles pass or fail without reading tea leaves in the output.
+	ExitCode  *int
+	Actor     Actor
+	SessionID string
+	Model     string
 	// MayMutateFiles is true for commands that can change the working tree
 	// without docket seeing the content. These open a window in which the
 	// timeline cannot be trusted, and the timeline marks it.
@@ -455,6 +489,7 @@ func Parse(path string) (*Session, ParseStats, error) {
 	if s.ID == "" {
 		s.ID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	}
+	s.Agent = AgentClaudeCode
 	return s, stats, nil
 }
 
