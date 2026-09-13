@@ -9,8 +9,10 @@ branding:
 inputs:
   version:
     description: >-
-      Version of docket to use: "latest" or a release tag such as v0.1.0 fetches
-      a prebuilt binary; any other value (a branch or commit) builds from source.
+      Version of docket to use: "latest" or a release tag such as v0.0.1 fetches
+      a prebuilt binary, "local" builds the checked-out source (what this
+      repository uses on its own pull requests), and anything else is treated as
+      a branch or commit to build from.
     default: latest
   base:
     description: Base revision. Defaults to the pull request's base.
@@ -62,8 +64,19 @@ runs:
         go-version: "1.25"
         cache: false
 
-    - name: Build docket from source
-      if: ${{ inputs.version != 'latest' && !startsWith(inputs.version, 'v') }}
+    - name: Build docket from the checked-out source
+      if: ${{ inputs.version == 'local' }}
+      shell: bash
+      # A pull request's ref is not something `go install` can resolve, so a
+      # repository reviewing itself builds the tree it already has.
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/docket-bin"
+        go build -o "$RUNNER_TEMP/docket-bin/docket" "$GITHUB_ACTION_PATH/../cmd/docket"
+        echo "$RUNNER_TEMP/docket-bin" >> "$GITHUB_PATH"
+
+    - name: Build docket from a branch or commit
+      if: ${{ inputs.version != 'latest' && inputs.version != 'local' && !startsWith(inputs.version, 'v') }}
       shell: bash
       run: go install github.com/Dillonsmart/docket/cmd/docket@${{ inputs.version }}
 

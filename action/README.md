@@ -20,7 +20,7 @@ jobs:
 
 | Input | Default | Meaning |
 |---|---|---|
-| `version` | `latest` | `latest` or a tag (`v0.1.0`) downloads the prebuilt binary — no Go on the runner. Any other value builds that branch or commit from source. |
+| `version` | `latest` | `latest` or a tag (`v0.0.1`) downloads the prebuilt binary — no Go on the runner. `local` builds the checked-out source. Anything else is a branch or commit to build from. |
 | `base` / `head` | the pull request's | Revisions to review. |
 | `comment` | `true` | Post and update one comment on the pull request. |
 | `fail-under` | empty | Fail the job when any hunk is below this evidence density. |
