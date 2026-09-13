@@ -25,12 +25,35 @@ func newHarness(t *testing.T) *harness {
 	// Keep the test away from the developer's own transcripts.
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(dir, "claude-config"))
 	t.Setenv("NO_COLOR", "1")
+	isolatePATH(t, dir)
 	h := &harness{t: t, dir: dir}
 	h.git("init", "-q")
 	h.git("config", "user.email", "test@example.com")
 	h.git("config", "user.name", "Test")
 	t.Chdir(dir)
 	return h
+}
+
+// isolatePATH gives the test a PATH with git on it and nothing else.
+//
+// `docket init` installs hooks that fall back to whatever docket is on PATH, so
+// a developer with docket installed would have their own binary — possibly an
+// older one — running inside these tests. The tests drive the hooks through
+// cli.Main directly and must not race with an installed copy.
+func isolatePATH(t *testing.T, dir string) {
+	t.Helper()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("git is required for these tests: %v", err)
+	}
+	bin := filepath.Join(dir, "isolated-bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(gitPath, filepath.Join(bin, "git")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
 }
 
 func (h *harness) git(args ...string) string {
