@@ -1,5 +1,10 @@
 # @dillonsmart/docket
 
+> Not published to npm yet. The wrapper works — `node bin/docket.js` from this
+> directory downloads and runs the binary — but until someone runs `npm publish`
+> here, `npx @dillonsmart/docket` will not resolve. Install with the shell
+> installer or a release archive instead.
+
 A thin wrapper around [docket](https://github.com/Dillonsmart/docket), a per-commit evidence record for agent-written code.
 
 ```sh

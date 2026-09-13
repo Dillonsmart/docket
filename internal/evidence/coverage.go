@@ -81,6 +81,10 @@ func Load(root string, paths []string) (*Coverage, error) {
 		if err == nil && st.ModTime().After(cov.Newest) {
 			cov.Newest = st.ModTime()
 		}
+		// Store the report's path relative to the repository. A docket is read on
+		// other machines, where an absolute path from someone's laptop is noise at
+		// best and a leak of their directory layout at worst.
+		rel := relative(root, p)
 		switch {
 		case strings.HasSuffix(p, ".json"):
 			if err := cov.loadIstanbul(root, data); err != nil {
@@ -89,7 +93,7 @@ func Load(root string, paths []string) (*Coverage, error) {
 		default:
 			cov.loadLCOV(root, string(data))
 		}
-		cov.Sources = append(cov.Sources, p)
+		cov.Sources = append(cov.Sources, rel)
 	}
 	if len(cov.Sources) == 0 {
 		return nil, nil

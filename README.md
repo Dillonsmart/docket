@@ -46,12 +46,6 @@ A single static binary. No Go toolchain, no runtime, nothing to compile.
 curl -fsSL https://raw.githubusercontent.com/Dillonsmart/docket/main/install.sh | sh
 ```
 
-Or without installing anything:
-
-```sh
-npx @dillonsmart/docket init
-```
-
 Or take the archive for your platform from [the releases page](https://github.com/Dillonsmart/docket/releases) — macOS and Linux on arm64 and x86-64, Windows on both — unpack it, and put `docket` on your PATH. Every release publishes `SHA256SUMS`; the installer checks them for you.
 
 Building from source stays available for anyone who wants it:
@@ -65,6 +59,36 @@ Then, in a repository:
 ```sh
 docket init
 ```
+
+### See it before instrumenting anything
+
+```sh
+scripts/demo.sh
+```
+
+It builds a throwaway repository in a temp directory with a recorded session in it — an agent fixes a session fixation bug, gets it wrong once, watches a test fail, fixes it properly — and prints the docket for the commit. Your own repositories are not touched, and the directory is deleted on exit.
+
+### Upgrading
+
+Re-run the installer. It overwrites the binary in place with the newest release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Dillonsmart/docket/main/install.sh | sh
+```
+
+`docket version` says what you have; [the releases page](https://github.com/Dillonsmart/docket/releases) says what is current. To pin, or to go back, name the tag:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Dillonsmart/docket/main/install.sh | DOCKET_VERSION=v0.0.2 sh
+```
+
+(The variable goes on the `sh` side of the pipe. In front of `curl` it would be set for the download and not for the script.)
+
+From source, it is `go install github.com/Dillonsmart/docket/cmd/docket@latest`. In CI, the action's default `version: latest` takes the newest release on every run; pin it to a tag if you would rather decide when that happens.
+
+Nothing needs migrating. Records already stored stay readable — each one carries the schema version it was written against — and there is no local state beyond the signing key, which upgrades never touch.
+
+You only need to re-run `docket init` if the binary lands somewhere new. The hooks call it by absolute path, falling back to whatever `docket` is on PATH, so an upgrade in place needs nothing; installing to a different directory and deleting the old copy is the case where the recorded path goes stale.
 
 That installs a `prepare-commit-msg` hook (which writes the trailer — the audited agent never writes its own audit record), a `post-commit` hook (which stores the record), the `refs/docket/*` refspec, a local signing key, and the Claude Code hooks that let docket observe edits made through the shell.
 
