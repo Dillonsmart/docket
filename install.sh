@@ -45,7 +45,12 @@ latest_version() {
 	url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") ||
 		die "could not reach GitHub to find the latest release"
 	version=${url##*/}
-	[ -n "$version" ] && [ "$version" != "latest" ] || die "no published release yet; install with: go install github.com/$REPO/cmd/docket@latest"
+	# With no releases at all, GitHub redirects to the releases page rather than
+	# to a tag, so those two names mean "nothing published yet".
+	case "$version" in
+		""|latest|releases)
+			die "no published release yet. Build from source with: go install github.com/$REPO/cmd/docket@latest" ;;
+	esac
 	printf '%s' "$version"
 }
 
