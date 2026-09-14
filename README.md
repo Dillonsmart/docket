@@ -6,9 +6,13 @@
 
 ---
 
-Coding agents produce code faster than anyone can verify it. The reviewer receives a finished diff with no implementation journey: no record of what the agent tried first, what it verified, or which lines nobody ever looked at. The harness already emits that journey and then throws it away at commit time.
+## Why
 
-Docket captures it, folds it against the diff, and produces a per-hunk evidence record — so review attention lands where there is no evidence.
+More and more of the code in a repository is written by a coding agent, often running in auto mode. The agent reads the code, picks an approach, edits, runs the tests, fixes what failed and hands back a finished diff. Along the way it made decisions and ran checks that the developer never saw.
+
+The developer still owns that code. They have to explain it in review, fix it when it breaks and decide whether to trust it. Without knowing what the agent tried, what it verified and which lines nobody ever looked at, that is hard to do.
+
+The agent harness already records all of this. It is thrown away when you commit. Docket keeps it: it reads the session, matches it against the diff, and stores a signed evidence record for each commit. You can then see, for any hunk or any line, who wrote it, why, what was tried before it, and what tested it.
 
 ```
 $ docket show HEAD
@@ -34,65 +38,51 @@ src/auth.js:3-6 (4 lines)  covered  density 0.77
   human       no recorded human contact with these lines
 ```
 
-No account. No network. The records live in the repository, on an orphan ref.
+There is no account and no network access. The records live in your repository on an orphan ref, `refs/docket/records`.
 
 ---
 
 ## Install
 
-A single static binary. No Go toolchain, no runtime, nothing to compile.
+Docket is a single static binary. On macOS or Linux:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Dillonsmart/docket/main/install.sh | sh
 ```
 
-Or take the archive for your platform from [the releases page](https://github.com/Dillonsmart/docket/releases) — macOS and Linux on arm64 and x86-64, Windows on both — unpack it, and put `docket` on your PATH. Every release publishes `SHA256SUMS`; the installer checks them for you.
+On Windows, or if you would rather not pipe to `sh`, download the archive for your platform from [the releases page](https://github.com/Dillonsmart/docket/releases) (macOS, Linux and Windows, arm64 and x86-64), unpack it and put `docket` on your PATH. Each release publishes `SHA256SUMS`, and the installer checks the download against it.
 
-Building from source stays available for anyone who wants it:
+To build from source:
 
 ```sh
 go install github.com/Dillonsmart/docket/cmd/docket@latest
 ```
 
-Then, in a repository:
-
-```sh
-docket init
-```
-
-### See it before instrumenting anything
+### Try it first
 
 ```sh
 scripts/demo.sh
 ```
 
-It builds a throwaway repository in a temp directory with a recorded session in it — an agent fixes a session fixation bug, gets it wrong once, watches a test fail, fixes it properly — and prints the docket for the commit. Your own repositories are not touched, and the directory is deleted on exit.
+This creates a throwaway repository in a temp directory with a recorded agent session in it. The agent fixes a session fixation bug, gets it wrong once, sees a test fail, fixes it properly, and also edits a second file through the shell, which the transcript does not record. It then prints the docket for the commit so you can see both kinds of hunk. Your own repositories are not touched and the directory is deleted on exit. It needs `docket` on your PATH, or `DOCKET=/path/to/docket`.
 
-### Upgrading
-
-Re-run the installer. It overwrites the binary in place with the newest release:
+### Set up a repository
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Dillonsmart/docket/main/install.sh | sh
+docket init
 ```
 
-`docket version` says what you have; [the releases page](https://github.com/Dillonsmart/docket/releases) says what is current. To pin, or to go back, name the tag:
+This installs:
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/Dillonsmart/docket/main/install.sh | DOCKET_VERSION=v0.0.2 sh
-```
+- a `prepare-commit-msg` git hook, which builds the record and writes its digest into the commit message as a trailer,
+- a `post-commit` git hook, which stores the record on `refs/docket/records`,
+- a fetch refspec for `refs/docket/*` on `origin`, so `git fetch` brings records down (`docket push` sends them up; if there is no remote yet, run `docket init` again once there is),
+- a local signing key in `.git/docket/`,
+- Claude Code `PreToolUse`/`PostToolUse` hooks in `.claude/settings.json`, so docket can see edits the agent makes through the shell.
 
-(The variable goes on the `sh` side of the pipe. In front of `curl` it would be set for the download and not for the script.)
+The hooks never block a commit. If docket is missing or the record cannot be built, the commit goes through and the error is written to `.git/docket/docket.log`.
 
-From source, it is `go install github.com/Dillonsmart/docket/cmd/docket@latest`. In CI, the action's default `version: latest` takes the newest release on every run; pin it to a tag if you would rather decide when that happens.
-
-Nothing needs migrating. Records already stored stay readable — each one carries the schema version it was written against — and there is no local state beyond the signing key, which upgrades never touch.
-
-You only need to re-run `docket init` if the binary lands somewhere new. The hooks call it by absolute path, falling back to whatever `docket` is on PATH, so an upgrade in place needs nothing; installing to a different directory and deleting the old copy is the case where the recorded path goes stale.
-
-That installs a `prepare-commit-msg` hook (which writes the trailer — the audited agent never writes its own audit record), a `post-commit` hook (which stores the record), the `refs/docket/*` refspec, a local signing key, and the Claude Code hooks that let docket observe edits made through the shell.
-
-From then on, every commit gets one extra line, in the trailer block where `Signed-off-by` and `Reviewed-by` live:
+From then on each commit gets one extra trailer line, alongside `Signed-off-by` and `Reviewed-by`:
 
 ```
     Add the session helper
@@ -104,33 +94,57 @@ From then on, every commit gets one extra line, in the trailer block where `Sign
     Docket: sha256:db77fdb4b0c1fc6cc7644d3fa2204267e25799d74a6f8f665aff3d32b12c39af
 ```
 
-That is the whole footprint in your history. `git log --oneline` is unchanged, your subject line is untouched, and the digest names a signed record on `refs/docket/records` rather than a URL — so nothing in the permanent history depends on a service still existing.
+That is the only change to your history. Subject lines and `git log --oneline` are untouched, and the trailer names a record in the repository rather than a URL, so it does not depend on any service staying up.
 
-Amending rebuilds the record and replaces the trailer, so a commit never points at the content it used to have. A merge gets no trailer, and neither does a commit with nothing attributable in it. Rebases and cherry-picks are the awkward case: git does not run `prepare-commit-msg` for either, so the trailer travels onto a diff it was not built from — `docket verify` reports that plainly rather than trusting the trailer.
+Some cases to know about:
 
-To stop: delete the two hooks in `.git/hooks`. Existing trailers stay in the history as inert text.
+- **Amend** rebuilds the record and replaces the trailer, so a commit never points at a record for content it no longer has.
+- **Merges** get no trailer, and neither does a commit with nothing attributable in it.
+- **Rebase and cherry-pick** do not run `prepare-commit-msg`, so the trailer is copied onto a diff it was not built from. `docket verify` reports this rather than trusting the trailer.
+
+To stop using docket, delete the two hooks from `.git/hooks`. Existing trailers stay in the history as plain text.
+
+### Upgrading
+
+Re-run the installer and it replaces the binary in place:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Dillonsmart/docket/main/install.sh | sh
+```
+
+`docket version` prints what you have. To pin a version, or to roll back, set `DOCKET_VERSION` on the `sh` side of the pipe:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Dillonsmart/docket/main/install.sh | DOCKET_VERSION=v0.0.4 sh
+```
+
+From source, `go install github.com/Dillonsmart/docket/cmd/docket@latest` again. In CI, the action's default `version: latest` picks up the newest release on each run; pin it to a tag if you want to control when that happens.
+
+Nothing needs migrating. Stored records carry the schema version they were written against and stay readable, and the only local state is the signing key, which upgrades do not touch. The hooks call the binary by absolute path and fall back to `docket` on PATH, so you only need to re-run `docket init` if you install to a new location and delete the old binary.
 
 ## Use it
 
 ```sh
-docket show HEAD                      # the record for a commit, risk-ordered
-docket explain src/auth.js:51         # why does this line exist? (via git blame)
+docket show HEAD                      # the record for a commit, riskiest hunks first
+docket build --staged                 # build a record for the staged change without committing
+docket explain src/auth.js:51         # why does this line exist? (found via git blame)
 docket review --format md             # the pull request comment
-docket verify HEAD                    # digest, signature and commit binding
-docket push                           # send the records to the remote
-docket doctor                         # what can docket see here, and what can't it
-docket gate --commits 20              # measure attribution against real history
+docket verify HEAD                    # check digest, signature and commit binding
+docket push                           # send records to the remote
+docket fetch                          # get records from the remote
+docket doctor                         # what docket can and cannot see in this repo
+docket gate --commits 20              # measure attribution against your own history
 ```
 
-For pull requests, [the GitHub Action](action/) reads the records the commits brought with them and posts one comment, reordering the diff so the hunks nothing can vouch for come first and the well-covered boilerplate is collapsed underneath. It downloads the same binary, so nothing needs installing on the runner either.
+For pull requests, [the GitHub Action](action/) reads the records that came with the commits and posts one comment. It puts the hunks with no evidence first and collapses the well-covered ones underneath. It downloads the same binary, so nothing needs installing on the runner.
 
-### Reading someone's reasoning back
+### Reading the reasoning back
 
-The fields that answer *why does this code look like this* are `task`, `intent` and `attempt`:
+Three fields answer "why does this code look like this":
 
-- **task** — the request this edit descends from, i.e. what the human actually asked for.
-- **intent** — what the agent said it was doing in the sentence immediately before it made the edit. This is where the reasoning lands, in the agent's own words.
-- **attempt** — code written into this same region and then taken out again, with the check that failed in between when there was one. The abandoned approaches are the part that is otherwise lost within hours.
+- **task**: the request this edit came from, in the human's words.
+- **intent**: what the agent said it was about to do, in the message immediately before the edit. This is the agent's reasoning in its own words.
+- **attempt**: code that was written into this region and then removed, with the check that failed in between if there was one. These abandoned approaches are the part that is normally lost within hours.
 
 ```
 $ docket explain database/migrations/0001_01_01_000000_create_players_table.php:54
@@ -146,44 +160,44 @@ database/migrations/…:54 was last written by be66f35c5977
               authenticatable model. [superseded]
 ```
 
-`docket explain` finds the commit through `git blame`, so you can start from the code in front of you rather than having to know which commit to look in. `docket show <sha> --all --json` gives the whole record if you would rather read it as data.
+`docket explain` uses `git blame` to find the commit, so you can start from the line in front of you rather than needing to know which commit to look in. `docket show <sha> --all --json` prints the whole record as JSON.
 
-Docket stores short redacted excerpts, not the conversation: enough to reconstruct the decision, never the whole transcript, because whole transcripts carry secrets and grow without bound.
+Docket stores short, redacted excerpts, not the conversation. That is enough to reconstruct the decision, and whole transcripts contain secrets and grow without bound.
 
 ---
 
 ## How it works
 
-**Attribution.** Docket parses the agent transcript into an ordered event stream, replays every recorded edit per file, and carries a provenance vector — one origin per line — forward through subsequent edits. At commit time it aligns the committed file against that replay and resolves each hunk.
+**Attribution.** Docket parses the agent transcript into an ordered stream of events, replays every recorded edit per file, and tracks an origin for each line through later edits. At commit time it lines up the committed file against that replay and resolves each hunk.
 
-A line is attributed only when its text is found at the aligned position *and* in the recorded output of the edit being credited. Timestamps only order events; they never justify an attribution.
+A line is only attributed to an edit when its text is found at the aligned position *and* in that edit's recorded output. Timestamps are used to order events, never to justify an attribution.
 
-When an edit's recorded pre-image disagrees with the replay — because a shell command, an editor or a person changed the file in between — the disagreement is detected, the affected lines become `unknown`, and the replay re-seeds from the recorded truth. Carrying a reconstruction past a disagreement is how tools produce confident, wrong answers. **An attribution engine that is confidently wrong is worse than no product**, so `unknown` is always an available answer, and it always comes with a reason.
+If an edit's recorded before-image disagrees with the replay, because a shell command, an editor or a person changed the file in between, docket marks the affected lines `unknown` and restarts the replay from the recorded content. It does not carry a guess forward. `unknown` is always an available answer and always comes with a reason, because a confidently wrong attribution is worse than none.
 
-**Agents.** Docket reads Claude Code, Codex CLI and opencode. Everything downstream — replay, attribution, evidence, the record — is agent-agnostic, so supporting another agent is a reader, not a redesign:
+**Agents.** Docket reads sessions from Claude Code, Codex CLI and opencode. Everything after the reader is agent-agnostic, so adding an agent means adding a reader:
 
 | Agent | Where its session lives | What docket gets from it |
 |---|---|---|
-| Claude Code | `~/.claude/projects/**/*.jsonl` | Edit/Write calls with before and after images, shell commands, prompts, the agent's own narration |
-| Codex CLI | `~/.codex/sessions/**/rollout-*.jsonl` | `apply_patch` calls, shell commands **with exit codes**, prompts, narration |
-| opencode | `~/.local/share/opencode/opencode.db` (needs `sqlite3`) | write/edit calls with diffs, shell commands **with exit codes**, prompts, narration |
-| anything else | — | wire its hooks to `docket collect pre` / `docket collect post` and the edits are observed directly |
+| Claude Code | `~/.claude/projects/**/*.jsonl` (or `$CLAUDE_CONFIG_DIR`) | Edit/Write calls with before and after images, shell commands, prompts, the agent's narration |
+| Codex CLI | `~/.codex/sessions/**/rollout-*.jsonl` | `apply_patch` calls, shell commands with exit codes, prompts, narration |
+| opencode | `~/.local/share/opencode/opencode.db` (needs `sqlite3` installed) | write/edit calls with diffs, shell commands with exit codes, prompts, narration |
+| anything else | — | point its hooks at `docket collect pre` and `docket collect post` and the edits are observed directly |
 
-Codex and opencode send patches rather than whole files, so their edits carry no before-image. Docket seeds the replay from the base revision and applies the patch to the content it was actually written against; when that does not fit, it re-seeds and marks what it cannot explain rather than placing the hunk by guesswork.
+Codex and opencode send patches rather than whole files, so their edits have no before-image. Docket seeds the replay from the base revision and applies each patch to the content it was written against. When a patch does not fit, it re-seeds and marks what it cannot explain rather than guessing where the hunk goes.
 
-**Observation.** Reading the transcript recovers `Edit` and `Write` calls. An agent that writes files through the shell — a heredoc, `sed -i`, a generator, a formatter — leaves nothing there to recover. So docket watches the working tree itself: a `PreToolUse` hook snapshots content, a `PostToolUse` hook diffs it, and both images are stored as git blobs. Those edits are marked `observed` rather than `transcript`, because docket read them itself.
+**Observation.** Reading the transcript recovers `Edit` and `Write` calls. An agent that writes files through the shell (a heredoc, `sed -i`, a generator, a formatter) leaves nothing in the transcript to recover. So docket also watches the working tree: a `PreToolUse` hook snapshots the content, a `PostToolUse` hook diffs it, and both images are stored as git blobs. These edits are marked `observed` rather than `transcript`, because docket saw them itself.
 
-**Evidence.** Test runs, type checks and static analysis are correlated with the edits they followed — a check that ran *before* the code was written is not evidence about it. Coverage reports (istanbul `coverage-final.json`, lcov) are matched line by line against the hunk, and ignored when the report is older than the code it would otherwise appear to cover.
+**Evidence.** Test runs, type checks and static analysis are matched to the edits they followed. A check that ran *before* the code was written is not evidence about it. Coverage reports (istanbul `coverage-final.json` and lcov) are matched line by line against each hunk, and ignored when the report is older than the code.
 
-**Density.** One number per hunk, between 0 and 1, [published in full](spec/CER.md#6-evidence-density) rather than tuned in private: coverage of these lines is worth at most 0.5, a check that passed after the edit 0.3 (0.35 if this change turned it green), type and static checks 0.1 together, recorded human contact 0.1. If nothing executed the code, the score is capped at 0.15. If nobody can say who wrote it, at 0.5. A locally-claimed record scores 0.9 of what a CI-attested one would.
+**Density.** Each hunk gets a score between 0 and 1. The formula is [published in the spec](spec/CER.md#6-evidence-density): coverage of the hunk's lines is worth up to 0.5, a check that passed after the edit 0.3 (0.35 if this change turned it green), type and static checks up to 0.1 together, recorded human contact up to 0.1. Then the caps: if nothing executed the code the score is capped at 0.15, if nobody can say who wrote it at 0.5, and a locally-claimed record scores 0.9 of a CI-attested one.
 
-Those caps are the point. This number will be turned into a target, exactly as coverage was, and a metric you can raise without running anything is worse than no metric.
+The caps matter. This number will end up being used as a target, the same way coverage was, and a score you can raise without running anything would be worthless.
 
 ---
 
-## How well does attribution actually work
+## How well does attribution work
 
-Docket measures itself. `docket gate` replays real sessions against real commits and reports what it could and could not explain:
+`docket gate` replays real sessions against real commits and reports what it could and could not explain. Measured so far:
 
 | Session | Agent | Hunks in files the session edited | Added lines | Content-verified |
 |---|---|---|---|---|
@@ -192,9 +206,9 @@ Docket measures itself. `docket gate` replays real sessions against real commits
 | A FastAPI project, 100 edits (uncommitted, measured against the working tree) | opencode | — | **92.9%** | — |
 | A PHP framework built largely through the shell (12 commits, 79 edits) | Claude Code | 59.2% | 82.1% | 100% |
 
-Two things to take from this. Every attribution was verified against the crediting edit's own recorded output — docket did not credit a line to an edit that did not write it. And the last row is why the collector exists: those sessions wrote files with heredocs and `sed`, which no transcript records, and that work happened before docket could observe it. With `docket init` in place, those edits are observed directly.
+Two things to take from this. Every attribution was checked against the crediting edit's own recorded output, so docket never credited a line to an edit that did not write it. And the last row is why the shell-edit hooks exist: those sessions wrote files with heredocs and `sed`, which no transcript records, before docket could observe them. With `docket init` in place, those edits are captured.
 
-Across whole diffs the headline rate is lower — 40%, 94%, 37% — because real commits also contain `composer.lock`, scaffolded models and generated code that no agent edit ever touched. Docket reports those as `unknown` with the commands that ran nearby listed as *candidates*, never as attributions. That is the honest answer, and it is deliberately not smoothed into the number.
+Across whole diffs the rate is lower (40%, 94% and 37% for the three committed sessions), because real commits also contain `composer.lock`, scaffolded models and generated code that no agent edit touched. Docket reports those as `unknown`, listing the commands that ran nearby as *candidates*. It does not count them as attributed.
 
 Run it on your own history:
 
@@ -208,37 +222,37 @@ docket gate --commits 20
 
 - Not orchestration, task assignment or agent spawning.
 - Not agent-to-agent handoff or provider routing.
-- Not a window you live in. It annotates the review surface you already use.
+- Not a UI you live in. It annotates the review surface you already use.
 - Not a live dashboard.
-- Not something that asks for an account before it does anything.
+- Not something that asks for an account.
 
 ## Privacy
 
-Traces contain raw prompts, file contents and terminal output. So:
+Transcripts contain raw prompts, file contents and terminal output, so:
 
-- Everything that reaches a record goes through an aggressive redaction pass: known credential shapes, private keys, JWTs, authorization headers, connection-string credentials, `KEY=`/`SECRET=`/`PASSWORD=` assignments — and, failing closed, any long token whose character distribution looks random.
+- Everything that reaches a record goes through a redaction pass: private key blocks, known credential formats (AWS, GitHub, GitLab, Slack, Stripe, Google, OpenAI, Anthropic, npm), JWTs, authorization headers, credentials in URLs, `KEY=`/`SECRET=`/`PASSWORD=` style assignments, and any long token whose characters look random.
 - A record stores short redacted excerpts, never whole files or whole prompts.
-- Nothing is sent anywhere. The records live in your repository, and `docket push` sends them to the git host you already trust.
+- Nothing is sent anywhere. Records live in your repository, and `docket push` sends them to the git host you already use.
 - The signing key lives in `.git/docket/` and never leaves the machine.
 
 ## Trust
 
 | Tier | Meaning |
 |---|---|
-| `local_claimed` | Built on a developer machine, signed with a key that machine holds. It is a claim. |
-| `ci_attested` | Built by a runner, signed with a key the developer does not hold. Set `DOCKET_SIGNING_KEY` in CI. |
+| `local_claimed` | Built on a developer machine and signed with a key that machine holds. It is a claim. |
+| `ci_attested` | Built by a CI runner and signed with a key the developer does not hold. Set `DOCKET_SIGNING_KEY` in CI. |
 
-The distinction is in the schema from day one and is shown everywhere a record is rendered.
+The tier is part of the schema and shown wherever a record is rendered.
 
 ## The format
 
-The record format is specified separately as the [**Commit Evidence Record**](spec/CER.md), with a [JSON Schema](spec/cer-0.1.schema.json). Docket is its reference implementation. The specification is Apache 2.0 and deliberately boring: it is meant to be implemented by other tools, including ones that compete with this one.
+The record format is specified separately as the [Commit Evidence Record](spec/CER.md), with a [JSON Schema](spec/cer-0.1.schema.json). Docket is the reference implementation. The spec is Apache 2.0 and written to be implemented by other tools.
 
 ## Status
 
-Built and working: attribution, the shell-edit collector, redaction, signed records on an orphan ref, coverage and test correlation, the terminal viewer, `explain`, the pull request comment, the GitHub Action, and the self-measurement gate.
+Working: attribution, the shell-edit hooks, redaction, signed records on an orphan ref, coverage and test correlation, the terminal viewer, `explain`, the pull request comment, the GitHub Action, and `gate`.
 
-Not built yet: readers for Gemini CLI and anything ACP-native, coverage correlation beyond istanbul/lcov, GitLab, cross-repository aggregation, policy gates on paths, and the hosted team tier.
+Not built yet: readers for Gemini CLI and anything ACP-native, coverage formats beyond istanbul and lcov, GitLab, cross-repository aggregation, policy gates on paths, and a hosted team tier.
 
 ## Licence
 
