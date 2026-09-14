@@ -1,6 +1,6 @@
 {
   "name": "@dillonsmart/docket",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "A per-commit evidence record for agent-written code. Installs the docket binary on first run.",
   "bin": { "docket": "bin/docket.js" },
   "files": ["bin/docket.js", "README.md"],
