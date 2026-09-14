@@ -134,6 +134,14 @@ type FileEdit struct {
 	UserModified bool   // the harness saw the human change this file first
 	Skill        string
 
+	// Gate is whether a permission prompt stood between the agent and this
+	// write; empty when the transcript does not say. It is the harness's
+	// configuration, not an observation of the human — a prompt in force is
+	// not proof anyone read the diff — so it is recorded with its GateDetail,
+	// the setting's own name, for the reader to weigh.
+	Gate       string
+	GateDetail string
+
 	// Source records how docket came to know about this edit.
 	//
 	// "transcript" means the agent harness reported it, which docket has to take
@@ -145,6 +153,12 @@ type FileEdit struct {
 	// Command is the shell command responsible, for observed edits.
 	Command string
 }
+
+// Gate values for FileEdit.
+const (
+	GatePrompted = "prompted"
+	GateAuto     = "auto"
+)
 
 // Source values for FileEdit.
 const (
@@ -306,19 +320,20 @@ const maxLine = 64 << 20
 // ---------------------------------------------------------------- parsing
 
 type record struct {
-	Type        string          `json:"type"`
-	UUID        string          `json:"uuid"`
-	ParentUUID  string          `json:"parentUuid"`
-	SessionID   string          `json:"sessionId"`
-	Timestamp   string          `json:"timestamp"`
-	CWD         string          `json:"cwd"`
-	GitBranch   string          `json:"gitBranch"`
-	Version     string          `json:"version"`
-	IsSidechain bool            `json:"isSidechain"`
-	IsMeta      bool            `json:"isMeta"`
-	Message     json.RawMessage `json:"message"`
-	ToolResult  json.RawMessage `json:"toolUseResult"`
-	Skill       string          `json:"attributionSkill"`
+	Type           string          `json:"type"`
+	UUID           string          `json:"uuid"`
+	ParentUUID     string          `json:"parentUuid"`
+	SessionID      string          `json:"sessionId"`
+	Timestamp      string          `json:"timestamp"`
+	CWD            string          `json:"cwd"`
+	GitBranch      string          `json:"gitBranch"`
+	Version        string          `json:"version"`
+	IsSidechain    bool            `json:"isSidechain"`
+	IsMeta         bool            `json:"isMeta"`
+	Message        json.RawMessage `json:"message"`
+	ToolResult     json.RawMessage `json:"toolUseResult"`
+	Skill          string          `json:"attributionSkill"`
+	PermissionMode string          `json:"permissionMode"` // on "permission-mode" records, once per turn
 }
 
 type message struct {
@@ -363,6 +378,7 @@ func Parse(path string) (*Session, ParseStats, error) {
 	lastAssistantText := ""
 	lastPrompt := ""
 	lastTask := "" // subagent task, when a Task tool call is in flight
+	mode := ""     // permission mode in force, from the last permission-mode record
 	seq := 0
 
 	sc := bufio.NewScanner(f)
@@ -410,6 +426,10 @@ func Parse(path string) (*Session, ParseStats, error) {
 		blocks := parseBlocks(msg.Content)
 
 		switch rec.Type {
+		case "permission-mode":
+			if rec.PermissionMode != "" {
+				mode = rec.PermissionMode
+			}
 		case "assistant":
 			for _, b := range blocks {
 				switch b.Type {
@@ -425,7 +445,7 @@ func Parse(path string) (*Session, ParseStats, error) {
 						name: b.Name, input: b.Input, at: at, model: msg.Model,
 						side: rec.IsSidechain, session: rec.SessionID,
 						intent: lastAssistantText, task: promptOrTask(rec.IsSidechain, lastPrompt, lastTask),
-						skill: rec.Skill,
+						skill: rec.Skill, mode: mode,
 					}
 				}
 			}

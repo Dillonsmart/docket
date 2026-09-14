@@ -35,7 +35,7 @@ src/auth.js:3-6 (4 lines)  covered  density 0.77
               vitest failed after this change: npx vitest run
   evidence    coverage: 4 of 4 lines executed (coverage/coverage-final.json)
   evidence    test_execution: pass (npx vitest run --coverage) — failed before this change
-  human       no recorded human contact with these lines
+  human       no recorded human contact with these lines — the edit was written without a prompt (claude-code acceptEdits)
 ```
 
 There is no account and no network access. The records live in your repository on an orphan ref, `refs/docket/records`.
@@ -78,7 +78,7 @@ This installs:
 - a `post-commit` git hook, which stores the record on `refs/docket/records`,
 - a fetch refspec for `refs/docket/*` on `origin`, so `git fetch` brings records down (`docket push` sends them up; if there is no remote yet, run `docket init` again once there is),
 - a local signing key in `.git/docket/`,
-- Claude Code `PreToolUse`/`PostToolUse` hooks in `.claude/settings.json`, so docket can see edits the agent makes through the shell.
+- Claude Code `PreToolUse`/`PostToolUse` hooks in `.claude/settings.local.json`, so docket can see edits the agent makes through the shell. That is the per-machine file, not the committed `settings.json`: the hook names the path to the binary on this machine.
 
 The hooks never block a commit. If docket is missing or the record cannot be built, the commit goes through and the error is written to `.git/docket/docket.log`.
 
@@ -188,6 +188,8 @@ Codex and opencode send patches rather than whole files, so their edits have no 
 **Observation.** Reading the transcript recovers `Edit` and `Write` calls. An agent that writes files through the shell (a heredoc, `sed -i`, a generator, a formatter) leaves nothing in the transcript to recover. So docket also watches the working tree: a `PreToolUse` hook snapshots the content, a `PostToolUse` hook diffs it, and both images are stored as git blobs. These edits are marked `observed` rather than `transcript`, because docket saw them itself.
 
 **Evidence.** Test runs, type checks and static analysis are matched to the edits they followed. A check that ran *before* the code was written is not evidence about it. Coverage reports (istanbul `coverage-final.json` and lcov) are matched line by line against each hunk, and ignored when the report is older than the code.
+
+**Human contact.** A terminal has no read receipts, so docket only claims what a harness recorded. `edited` means the harness saw the file change underneath it and these lines are among the ones that differed — line-accurate, from a recorded before-image. `approved` means the edit that wrote these lines went through a permission prompt: Claude Code's `default` mode, Codex's `untrusted` policy or a read-only sandbox. That is inferred from the setting in force, not observed, and a per-tool allow rule can silence a prompt the mode would otherwise show, so every record says what the claim rests on (`contact_basis`) and a reader can discount it. Everything else is `none`, with the basis saying whether the harness wrote without asking or the transcript simply does not say. opencode records nothing about permissions per call, so its edits are always the latter.
 
 **Density.** Each hunk gets a score between 0 and 1. The formula is [published in the spec](spec/CER.md#6-evidence-density): coverage of the hunk's lines is worth up to 0.5, a check that passed after the edit 0.3 (0.35 if this change turned it green), type and static checks up to 0.1 together, recorded human contact up to 0.1. Then the caps: if nothing executed the code the score is capped at 0.15, if nobody can say who wrote it at 0.5, and a locally-claimed record scores 0.9 of a CI-attested one.
 

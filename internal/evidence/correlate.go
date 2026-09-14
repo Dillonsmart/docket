@@ -197,7 +197,8 @@ func stamp(t time.Time) string {
 //   - A passing check that ran after the edit adds 0.3, and 0.35 if this change
 //     turned it from failing to passing.
 //   - Type and static checks add 0.05 each, capped at 0.1.
-//   - Recorded human contact adds 0.1.
+//   - Recorded human contact adds 0.1: lines the harness saw the human change,
+//     or an edit that went through a permission prompt.
 //   - If nothing executed the code at all, the score cannot exceed 0.15,
 //     whatever else is true.
 //   - If nobody can say who wrote it, the score cannot exceed 0.5.
@@ -242,8 +243,6 @@ func Density(h attribute.Hunk, ev []cer.Evidence, contact string, trust string) 
 	switch contact {
 	case cer.ContactEdited, cer.ContactApproved:
 		score += 0.1
-	case cer.ContactViewed:
-		score += 0.05
 	}
 
 	if !executed {

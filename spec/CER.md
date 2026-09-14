@@ -59,7 +59,8 @@ A record is a single JSON object. Unknown members must be preserved by consumers
 | `contributors` | array | Other edits that wrote lines in this hunk. |
 | `attempts` | array | See §2.3. |
 | `evidence` | array | See §2.4. |
-| `human_contact` | string | `none`, `edited`, `approved`, `viewed`. |
+| `human_contact` | string | `none`, `edited`, `approved`. See §2.6. |
+| `contact_basis` | string | What `human_contact` rests on, in words. |
 | `added_lines` | int | Lines the hunk adds. |
 | `attributed_lines` | int | Of those, how many resolve to a recorded edit. |
 | `verified_lines` | int | Of those, how many appear verbatim in that edit's recorded output. |
@@ -97,11 +98,25 @@ An implementation that reads a harness recording only patches (no pre-image) mus
 |---|---|
 | `pre_existing` | The line was already there when the session first saw the file. |
 | `untracked_mutation` | The file changed outside any recorded edit. |
-| `human_edit` | The harness reported the human changing the file. |
+| `human_edit` | The harness reported the human changing the file, and this line is among those that differed. |
 | `lossy_edit` | An edit was recorded but could not be replayed. |
 | `not_in_timeline` | The committed line appears nowhere in the replay. |
 
 `candidates` may list commands that could account for the change. They are candidates, never attributions: `path_mentioned` marks the circumstantial case where the command line names the file.
+
+### 2.6 Human contact
+
+`human_contact` is a claim about the hunk's lines, not about the file or the session, and each value has to be earned from something recorded:
+
+| Value | Earned when |
+|---|---|
+| `edited` | The harness recorded the file changing underneath it — the pre-image of a later edit disagreed with the replay — and lines in this hunk are among those that differed. Or an implementation watched the file change under a command the human ran. |
+| `approved` | The edit that wrote these lines went through a permission prompt: the harness was configured to ask before writing, and the edit was written. |
+| `none` | Neither. |
+
+`contact_basis` must say what the value rests on: the harness setting that was in force, how many lines differed, or why nothing could be established. It exists because `approved` is inferred from configuration rather than observed — a prompt in force is not proof that the diff was read, and a per-tool allow rule can silence a prompt the mode would otherwise show — and a reader is entitled to discount it. A `none` with a basis of "the transcript does not record whether a prompt was in force" is a different answer from a `none` under a mode that never asks.
+
+There is no value for the human having seen the code without a gate. A terminal has no read receipts, and a value nothing can produce would only invite an implementation to guess it.
 
 ---
 
@@ -158,7 +173,7 @@ An aggregate over several records takes the lowest tier of its members.
 | Coverage of the hunk's lines, from a report newer than the code | up to 0.5, proportional |
 | A check that passed after the edit | 0.3, or 0.35 if it failed before the change |
 | Type and static checks that passed after the edit | 0.05 each, capped at 0.1 |
-| Recorded human contact | 0.1 (`edited`/`approved`), 0.05 (`viewed`) |
+| Recorded human contact | 0.1 (`edited` or `approved`) |
 
 Then, in order: if nothing executed the code, the score is capped at 0.15; if the origin is unknown, at 0.5; if `trust` is not `ci_attested`, the score is multiplied by 0.9.
 

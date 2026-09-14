@@ -66,7 +66,7 @@ func TestRecordSatisfiesPublishedSchema(t *testing.T) {
 		"trust":                  {TrustLocalClaimed, TrustCIAttested},
 		"docket_version":         {Version},
 		"spec":                   {SpecID},
-		"human_contact":          {ContactNone, ContactEdited, ContactApproved, ContactViewed},
+		"human_contact":          {ContactNone, ContactEdited, ContactApproved},
 		"attribution_confidence": {"high", "medium", "none"},
 	}
 	check := func(where map[string]any, key string, allowed []string) {

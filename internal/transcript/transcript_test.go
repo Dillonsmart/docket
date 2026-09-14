@@ -230,3 +230,43 @@ func TestReportedExitCodeIsUsedOnlyWhenItMeansAnything(t *testing.T) {
 		t.Errorf("piped run = %+v, want a failure read from the output", got)
 	}
 }
+
+// An edit before any permission-mode record must stay unknown, not default.
+func TestEditCarriesThePermissionModeInForce(t *testing.T) {
+	mode := func(uuid, m string) map[string]any {
+		return map[string]any{"type": "permission-mode", "permissionMode": m, "sessionId": "s1", "uuid": uuid}
+	}
+	result := func(path string) map[string]any {
+		return map[string]any{"type": "create", "filePath": path, "content": "x\n",
+			"originalFile": nil, "structuredPatch": []any{}, "userModified": false}
+	}
+	path := writeTranscript(t, []map[string]any{
+		toolUse("a0", "t0", "Write", map[string]any{"file_path": "/repo/zero.go", "content": "x\n"}, ""),
+		toolResult("u0", "t0", result("/repo/zero.go")),
+		mode("m1", "default"),
+		toolUse("a1", "t1", "Write", map[string]any{"file_path": "/repo/one.go", "content": "x\n"}, ""),
+		toolResult("u1", "t1", result("/repo/one.go")),
+		mode("m2", "acceptEdits"),
+		toolUse("a2", "t2", "Write", map[string]any{"file_path": "/repo/two.go", "content": "x\n"}, ""),
+		toolResult("u2", "t2", result("/repo/two.go")),
+	})
+
+	s, _, err := Parse(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Edits) != 3 {
+		t.Fatalf("got %d edits, want 3", len(s.Edits))
+	}
+	want := []struct{ gate, detail string }{
+		{"", ""},
+		{GatePrompted, "default"},
+		{GateAuto, "acceptEdits"},
+	}
+	for i, w := range want {
+		e := s.Edits[i]
+		if e.Gate != w.gate || e.GateDetail != w.detail {
+			t.Errorf("edit %d: gate = %q (%q), want %q (%q)", i, e.Gate, e.GateDetail, w.gate, w.detail)
+		}
+	}
+}

@@ -255,7 +255,7 @@ func hunkText(s style, h cer.Hunk) string {
 	for _, e := range h.Evidence {
 		fmt.Fprintf(&b, "  evidence    %s\n", evidenceLine(s, e))
 	}
-	fmt.Fprintf(&b, "  human       %s\n", humanLine(s, h.HumanContact))
+	fmt.Fprintf(&b, "  human       %s\n", humanLine(s, h.HumanContact, h.ContactBasis))
 	b.WriteString("\n")
 	return b.String()
 }
@@ -290,11 +290,18 @@ func evidenceLine(s style, e cer.Evidence) string {
 	}
 }
 
-func humanLine(s style, contact string) string {
+// The basis is uncoloured either way: it is the part a reader weighs.
+func humanLine(s style, contact, basis string) string {
+	var line string
 	if contact == cer.ContactNone {
-		return s.amber("no recorded human contact with these lines")
+		line = s.amber("no recorded human contact with these lines")
+	} else {
+		line = s.green(contact)
 	}
-	return s.green(contact)
+	if basis != "" {
+		line += " — " + basis
+	}
+	return line
 }
 
 func attributionLine(s style, t cer.Totals) string {

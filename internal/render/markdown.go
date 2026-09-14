@@ -178,10 +178,14 @@ func hunkMarkdown(h cer.Hunk, o MarkdownOptions) string {
 		}
 	}
 	if h.HumanContact == cer.ContactNone {
-		b.WriteString("- **human contact** none recorded\n")
+		b.WriteString("- **human contact** none recorded")
 	} else {
-		fmt.Fprintf(&b, "- **human contact** %s\n", h.HumanContact)
+		fmt.Fprintf(&b, "- **human contact** %s", h.HumanContact)
 	}
+	if h.ContactBasis != "" {
+		fmt.Fprintf(&b, " — %s", h.ContactBasis)
+	}
+	b.WriteString("\n")
 	b.WriteString("\n")
 	return b.String()
 }

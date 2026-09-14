@@ -214,8 +214,9 @@ func recordHunk(tl *timeline.Timeline, corr *evidence.Correlator, h attribute.Hu
 	ch := cer.Hunk{
 		File: h.Path, Range: h.NewRange, AddedLines: h.AddedLines,
 		Attributed: h.Attributed, Verified: h.Verified,
-		Confidence: string(h.Confidence), HumanContact: cer.ContactNone,
+		Confidence: string(h.Confidence),
 	}
+	ch.HumanContact, ch.ContactBasis = contact(h)
 
 	if h.Primary != nil {
 		e := h.Primary
@@ -229,9 +230,6 @@ func recordHunk(tl *timeline.Timeline, corr *evidence.Correlator, h attribute.Hu
 			Actor: string(e.Actor), AgentID: e.AgentID, Model: e.Model,
 			Session: e.SessionID, Task: task.Text, Tool: e.Tool,
 			Source: e.Source, At: stamp(e.At), Intent: intent.Text, Command: cmd.Text,
-		}
-		if e.Actor == transcript.ActorHuman {
-			ch.HumanContact = cer.ContactEdited
 		}
 	} else {
 		ch.Origin = cer.Origin{Actor: cer.ActorUnknown}
@@ -250,10 +248,6 @@ func recordHunk(tl *timeline.Timeline, corr *evidence.Correlator, h attribute.Hu
 			AgentID: e.AgentID, Session: e.SessionID, Tool: e.Tool,
 			Lines: c.Lines, At: stamp(e.At), Task: task.Text,
 		})
-	}
-
-	if h.HumanEdited && ch.HumanContact == cer.ContactNone {
-		ch.HumanContact = cer.ContactEdited
 	}
 
 	for _, a := range h.Attempts {
@@ -280,6 +274,41 @@ func recordHunk(tl *timeline.Timeline, corr *evidence.Correlator, h attribute.Hu
 	ch.Evidence = ev
 	ch.Density = evidence.Density(h, ev, ch.HumanContact, trust)
 	return ch, redact.Merge(rules)
+}
+
+// contact ranks what can be claimed about a person and these lines: lines
+// that differed in a recorded pre-image beat a prompt that was merely in force.
+// Every outcome carries a basis, because "no contact" and "no way to tell" are
+// different answers.
+func contact(h attribute.Hunk) (string, string) {
+	if n := h.Reasons[timeline.ReasonHumanEdit]; n > 0 {
+		return cer.ContactEdited, fmt.Sprintf("%d of these lines changed under the harness between its edits", n)
+	}
+	e := h.Primary
+	if e == nil {
+		if h.HumanEdited {
+			return cer.ContactNone, "the file changed under the harness during the session, but not on these lines"
+		}
+		return cer.ContactNone, ""
+	}
+	if e.Actor == transcript.ActorHuman {
+		return cer.ContactEdited, "docket watched the file change under a command the human ran"
+	}
+	harness := e.AgentID
+	if i := strings.Index(harness, "/"); i >= 0 {
+		harness = harness[:i]
+	}
+	setting := harness + " " + e.GateDetail
+	switch e.Gate {
+	case transcript.GatePrompted:
+		return cer.ContactApproved, "the edit ran under a permission prompt (" + setting + ")"
+	case transcript.GateAuto:
+		return cer.ContactNone, "the edit was written without a prompt (" + setting + ")"
+	}
+	if e.Source == transcript.SourceObserved {
+		return cer.ContactNone, "the edit was made through the shell, where nothing gates it"
+	}
+	return cer.ContactNone, "the transcript does not record whether a prompt was in force"
 }
 
 // attempt describes an edit whose lines were taken out again, and looks for the

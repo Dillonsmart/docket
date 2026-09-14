@@ -122,6 +122,34 @@ type payload struct {
 	Message string `json:"message"`
 	// session_meta
 	CLIVersion string `json:"cli_version"`
+	// turn_context
+	ApprovalPolicy string `json:"approval_policy"`
+	SandboxPolicy  struct {
+		Type string `json:"type"`
+	} `json:"sandbox_policy"`
+}
+
+// The approval policy alone does not decide whether a patch was prompted for:
+// "on-request" asks only when the sandbox would refuse the write, so a patch
+// that applied under a read-only sandbox was approved and one under
+// workspace-write was not.
+func gate(policy, sandbox string) (string, string) {
+	detail := policy
+	if sandbox != "" {
+		detail = policy + " approval, " + sandbox + " sandbox"
+	}
+	switch {
+	case policy == "":
+		return "", detail
+	case policy == "untrusted":
+		return transcript.GatePrompted, detail
+	case policy == "never":
+		return transcript.GateAuto, detail
+	case sandbox == "read-only":
+		return transcript.GatePrompted, detail
+	default:
+		return transcript.GateAuto, detail
+	}
 }
 
 // Parse reads one rollout file.
@@ -137,7 +165,7 @@ func Parse(path string) (*transcript.Session, transcript.ParseStats, error) {
 
 	pend := map[string]pendingCall{}
 
-	lastAgentText, lastPrompt, model := "", "", ""
+	lastAgentText, lastPrompt, model, policy, sandbox := "", "", "", "", ""
 	seq := 0
 
 	sc := bufio.NewScanner(f)
@@ -179,6 +207,12 @@ func Parse(path string) (*transcript.Session, transcript.ParseStats, error) {
 				model = p.Model
 				s.Model = p.Model
 			}
+			if p.ApprovalPolicy != "" {
+				policy = p.ApprovalPolicy
+			}
+			if p.SandboxPolicy.Type != "" {
+				sandbox = p.SandboxPolicy.Type
+			}
 			if p.CWD != "" && s.CWD == "" {
 				s.CWD = p.CWD
 			}
@@ -199,7 +233,7 @@ func Parse(path string) (*transcript.Session, transcript.ParseStats, error) {
 			case "custom_tool_call", "function_call", "local_shell_call":
 				pend[p.CallID] = pendingCall{
 					name: p.Name, input: p.Input, args: p.Arguments, at: at,
-					intent: lastAgentText, task: lastPrompt, model: model,
+					intent: lastAgentText, task: lastPrompt, model: model, policy: policy, sandbox: sandbox,
 				}
 			case "custom_tool_call_output", "function_call_output":
 				call, ok := pend[p.CallID]
@@ -326,13 +360,15 @@ func parseTime(s string) time.Time {
 
 // pendingCall is a tool call waiting for its output record.
 type pendingCall struct {
-	name   string
-	input  string
-	args   string
-	at     time.Time
-	intent string
-	task   string
-	model  string
+	name    string
+	input   string
+	args    string
+	at      time.Time
+	intent  string
+	task    string
+	model   string
+	policy  string // approval policy in force when the call was made
+	sandbox string // sandbox policy in force when the call was made
 }
 
 // editsFromPatch turns one apply_patch call into an edit per file it touched.
@@ -352,6 +388,7 @@ func editsFromPatch(input, session, callID string, seq *int, call pendingCall, a
 			AgentID: "codex/main", Model: call.model, SessionID: session,
 			Task: call.task, Intent: call.intent, Source: transcript.SourceTranscript,
 		}
+		e.Gate, e.GateDetail = gate(call.policy, call.sandbox)
 		if f.Added {
 			e.Created = true
 			e.HasPre = true

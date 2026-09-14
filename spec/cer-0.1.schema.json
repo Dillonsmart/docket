@@ -299,9 +299,11 @@
           "enum": [
             "none",
             "edited",
-            "approved",
-            "viewed"
+            "approved"
           ]
+        },
+        "contact_basis": {
+          "type": "string"
         },
         "added_lines": {
           "type": "integer",

@@ -48,11 +48,18 @@ func cmdDoctor(env *env, args []string) error {
 		}
 	}
 
-	// Agent hooks.
+	// Agent hooks. An older init wrote them to the shared file, where they work
+	// but carry one machine's path into the commit.
 	agentPath := agentHooksPath(repo)
-	if data, err := os.ReadFile(agentPath); err == nil && containsBytes(data, "docket collect") {
+	sharedPath := sharedAgentHooksPath(repo)
+	local, _ := os.ReadFile(agentPath)
+	shared, _ := os.ReadFile(sharedPath)
+	switch {
+	case containsBytes(local, "docket collect"):
 		fmt.Fprintf(out, "agent hooks  %-20s ok (shell edits are observed)\n", rel(repo.Root, agentPath))
-	} else {
+	case containsBytes(shared, "docket collect"):
+		fmt.Fprintf(out, "agent hooks  %-20s ok, but this file is shared and the hook names a path on this machine — move it to %s\n", rel(repo.Root, sharedPath), rel(repo.Root, agentPath))
+	default:
 		fmt.Fprintf(out, "agent hooks  %-20s MISSING — edits made through the shell will be unattributable\n", rel(repo.Root, agentPath))
 	}
 

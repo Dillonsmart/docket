@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,5 +171,49 @@ func TestDeletionsAreNotRecordedAsEdits(t *testing.T) {
 	edits := editsFromPatch("", "s", "c", &seq, pendingCall{}, time.Time{})
 	if len(edits) != 0 {
 		t.Errorf("an empty patch produced %d edits", len(edits))
+	}
+}
+
+// Whether a patch was prompted for depends on the sandbox as well as the policy.
+func TestEditCarriesTheApprovalPolicyInForce(t *testing.T) {
+	turn := func(ts, policy, sandbox string) map[string]any {
+		return map[string]any{"timestamp": ts, "type": "turn_context",
+			"payload": map[string]any{"model": "gpt-5.4", "cwd": "/repo", "approval_policy": policy,
+				"sandbox_policy": map[string]any{"type": sandbox}}}
+	}
+	patch := func(ts, id string) []map[string]any {
+		return []map[string]any{
+			item(ts, map[string]any{"type": "custom_tool_call", "name": "apply_patch", "call_id": id, "input": addPatch}),
+			item(ts, map[string]any{"type": "custom_tool_call_output", "call_id": id,
+				"output": `{"output":"Success. Updated the following files:\nA /repo/src/auth.py\n","metadata":{"exit_code":0}}`}),
+		}
+	}
+	turns := []struct{ policy, sandbox, gate string }{
+		{"untrusted", "workspace-write", "prompted"},
+		{"on-request", "workspace-write", "auto"},
+		{"on-request", "read-only", "prompted"},
+		{"never", "read-only", "auto"},
+	}
+	var records []map[string]any
+	for i, tc := range turns {
+		ts := fmt.Sprintf("2026-09-13T10:%02d:00.000Z", i)
+		records = append(records, turn(ts, tc.policy, tc.sandbox))
+		records = append(records, patch(ts, fmt.Sprintf("c%d", i))...)
+	}
+	path := writeRollout(t, "/repo", records)
+
+	s, _, err := Parse(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Edits) != len(turns) {
+		t.Fatalf("got %d edits, want %d", len(s.Edits), len(turns))
+	}
+	for i, tc := range turns {
+		e := s.Edits[i]
+		detail := tc.policy + " approval, " + tc.sandbox + " sandbox"
+		if e.Gate != tc.gate || e.GateDetail != detail {
+			t.Errorf("%s/%s: gate = %q (%q), want %q (%q)", tc.policy, tc.sandbox, e.Gate, e.GateDetail, tc.gate, detail)
+		}
 	}
 }

@@ -41,12 +41,13 @@ const (
 	ActorUnknown = "unknown"
 )
 
-// Human contact values.
+// Human contact values: claims about these lines, each earned from something
+// recorded (spec §2.6). There is no "viewed" — a terminal has no read receipts,
+// and a value nothing can produce invites guessing.
 const (
 	ContactNone     = "none"
-	ContactEdited   = "edited"
-	ContactApproved = "approved"
-	ContactViewed   = "viewed"
+	ContactEdited   = "edited"   // these lines changed under the harness
+	ContactApproved = "approved" // the edit went through a permission prompt
 )
 
 // Record is one commit's evidence record.
@@ -120,6 +121,9 @@ type Hunk struct {
 	Attempts     []Attempt     `json:"attempts,omitempty"`
 	Evidence     []Evidence    `json:"evidence,omitempty"`
 	HumanContact string        `json:"human_contact"`
+	// ContactBasis is what human_contact rests on, so a reader can discount it:
+	// "approved" is inferred from a setting, not observed.
+	ContactBasis string `json:"contact_basis,omitempty"`
 
 	AddedLines int     `json:"added_lines"`
 	Attributed int     `json:"attributed_lines"`

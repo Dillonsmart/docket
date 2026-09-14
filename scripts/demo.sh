@@ -115,7 +115,10 @@ B=$(json_string "$BEFORE
 "); V=$(json_string "$FINAL
 ")
 
+# acceptEdits, so the docket says the agent wrote without asking rather than
+# implying someone read the diff.
 cat > "$PROJECT/demo-session.jsonl" <<JSONL
+{"type":"permission-mode","permissionMode":"acceptEdits","sessionId":"demo-session"}
 {"type":"user","uuid":"u1","sessionId":"demo-session","cwd":"$REPO","timestamp":"$(now 300)","message":{"role":"user","content":"Fix the session fixation issue on login — an id minted before auth is still valid afterwards"}}
 {"type":"assistant","uuid":"a1","sessionId":"demo-session","cwd":"$REPO","timestamp":"$(now 290)","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"Rotating the id at login and flagging it, so a pre-auth id is no longer accepted."},{"type":"tool_use","id":"e1","name":"Edit","input":{"file_path":$FILE}}]}}
 {"type":"user","uuid":"u2","sessionId":"demo-session","cwd":"$REPO","timestamp":"$(now 289)","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"e1"}]},"toolUseResult":{"filePath":$FILE,"oldString":$B,"newString":$F,"originalFile":$B,"structuredPatch":[],"userModified":false,"replaceAll":false}}

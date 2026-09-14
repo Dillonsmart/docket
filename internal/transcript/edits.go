@@ -75,6 +75,7 @@ func buildEdit(id, tool string, seq int, p pending, raw json.RawMessage) *FileEd
 		IsSidechain: p.side, Task: p.task, Intent: p.intent,
 		UserModified: res.UserModified, Skill: p.skill,
 		AgentID: agentID(p.side, p.task), Source: SourceTranscript,
+		Gate: gateFor(p.mode), GateDetail: p.mode,
 	}
 	e.Patch = convertPatch(res.Patch)
 
@@ -171,6 +172,20 @@ type pending struct {
 	intent  string
 	task    string
 	skill   string
+	mode    string // permission mode in force when the tool was called
+}
+
+// Only "default" asks before writing. An unrecorded mode stays unknown: guessing
+// would turn "the transcript did not say" into a claim about the human.
+func gateFor(mode string) string {
+	switch mode {
+	case "":
+		return ""
+	case "default":
+		return GatePrompted
+	default:
+		return GateAuto
+	}
 }
 
 // agentID names the agent that made an edit. Claude Code does not record which

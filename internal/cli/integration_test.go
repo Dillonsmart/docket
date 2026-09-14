@@ -24,6 +24,8 @@ func newHarness(t *testing.T) *harness {
 	dir := t.TempDir()
 	// Keep the test away from the developer's own transcripts.
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(dir, "claude-config"))
+	// And from their global git ignore, which would hide a missing exclude.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg-config"))
 	t.Setenv("NO_COLOR", "1")
 	isolatePATH(t, dir)
 	h := &harness{t: t, dir: dir}
@@ -259,12 +261,19 @@ func TestInitIsIdempotentAndDoesNotClobberHooks(t *testing.T) {
 	if _, code := h.run("", "init"); code != 0 {
 		t.Fatal("second init failed")
 	}
-	settings, err := os.ReadFile(filepath.Join(h.dir, ".claude", "settings.json"))
+	settings, err := os.ReadFile(filepath.Join(h.dir, ".claude", "settings.local.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Count(string(settings), "collect pre") != 1 {
 		t.Errorf("agent hooks were duplicated:\n%s", settings)
+	}
+	// The shared file is committed; the hook command names a path on this machine.
+	if _, err := os.Stat(filepath.Join(h.dir, ".claude", "settings.json")); err == nil {
+		t.Error("init wrote the agent hooks to the shared settings.json")
+	}
+	if status := h.git("status", "--porcelain", "--", ".claude"); strings.Contains(status, "settings.local.json") {
+		t.Errorf("settings.local.json shows up as untracked:\n%s", status)
 	}
 }
 

@@ -157,8 +157,15 @@ exec "$BIN" hook %s "$@"
 `, hookMarker, bin, name)
 }
 
-// agentHooksPath is where Claude Code reads project settings from.
+// agentHooksPath is the per-machine settings file: the hook command names this
+// machine's binary, and the shared settings.json is committed.
 func agentHooksPath(repo *gitx.Repo) string {
+	return filepath.Join(repo.Root, ".claude", "settings.local.json")
+}
+
+// sharedAgentHooksPath is where earlier versions wrote the hooks. Claude Code
+// runs both files, so init and doctor still look here.
+func sharedAgentHooksPath(repo *gitx.Repo) string {
 	return filepath.Join(repo.Root, ".claude", "settings.json")
 }
 
@@ -173,6 +180,7 @@ func installAgentHooks(repo *gitx.Repo, bin string) (bool, string, error) {
 			return false, path, fmt.Errorf("%s is not valid JSON", rel(repo.Root, path))
 		}
 	}
+	shared, _ := os.ReadFile(sharedAgentHooksPath(repo))
 	hooks, _ := settings["hooks"].(map[string]any)
 	if hooks == nil {
 		hooks = map[string]any{}
@@ -181,7 +189,7 @@ func installAgentHooks(repo *gitx.Repo, bin string) (bool, string, error) {
 	for event, sub := range map[string]string{"PreToolUse": "pre", "PostToolUse": "post"} {
 		command := fmt.Sprintf("%s collect %s", bin, sub)
 		list, _ := hooks[event].([]any)
-		if hasCommand(list, "docket collect "+sub) {
+		if hasCommand(list, "docket collect "+sub) || containsBytes(shared, "docket collect "+sub) {
 			continue
 		}
 		list = append(list, map[string]any{
@@ -206,7 +214,30 @@ func installAgentHooks(repo *gitx.Repo, bin string) (bool, string, error) {
 	if err != nil {
 		return false, path, err
 	}
-	return true, path, os.WriteFile(path, append(data, '\n'), 0o644)
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		return false, path, err
+	}
+	return true, path, excludeFromGit(repo, path)
+}
+
+// excludeFromGit uses .git/info/exclude rather than .gitignore: the file is
+// per-machine, and so should the ignore be. Claude Code's global ignore usually
+// covers it already, but not on every machine.
+func excludeFromGit(repo *gitx.Repo, path string) error {
+	if _, err := repo.Git("check-ignore", "-q", path); err == nil {
+		return nil
+	}
+	exclude := filepath.Join(repo.GitDir, "info", "exclude")
+	if err := os.MkdirAll(filepath.Dir(exclude), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(exclude, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "%s\n", rel(repo.Root, path))
+	return err
 }
 
 func hasCommand(list []any, needle string) bool {
