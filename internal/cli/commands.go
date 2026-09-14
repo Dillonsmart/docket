@@ -191,7 +191,10 @@ func cmdExplain(env *env, args []string) error {
 func blame(repo *gitx.Repo, path string, line int) (string, int, error) {
 	out, err := repo.Git("blame", "--porcelain", "-L", fmt.Sprintf("%d,%d", line, line), "--", path)
 	if err != nil {
-		return "", 0, fmt.Errorf("git blame could not resolve %s:%d", path, line)
+		// Git already says why (no such path, line past the end of the file,
+		// untracked); a typo in the path is the usual cause and the person
+		// needs to see it rather than a generic failure.
+		return "", 0, fmt.Errorf("git blame could not resolve %s:%d: %s", path, line, gitReason(err))
 	}
 	fields := strings.Fields(firstLine(out))
 	if len(fields) < 3 {
@@ -202,6 +205,16 @@ func blame(repo *gitx.Repo, path string, line int) (string, int, error) {
 		orig = line
 	}
 	return fields[0], orig, nil
+}
+
+// gitReason strips the "git <args>: exit status N: " prefix gitx puts on a
+// failed command, leaving the line git itself printed.
+func gitReason(err error) string {
+	msg := err.Error()
+	if i := strings.LastIndex(msg, ": "); i >= 0 {
+		return msg[i+2:]
+	}
+	return msg
 }
 
 func cmdReview(env *env, args []string) error {
