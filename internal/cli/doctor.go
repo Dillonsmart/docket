@@ -41,7 +41,7 @@ func cmdDoctor(env *env, args []string) error {
 		switch {
 		case err != nil:
 			fmt.Fprintf(out, "hook         %-20s MISSING — run docket init\n", name)
-		case !containsBytes(data, "docket hook "):
+		case !containsBytes(data, hookMarker):
 			fmt.Fprintf(out, "hook         %-20s present but not docket's\n", name)
 		default:
 			fmt.Fprintf(out, "hook         %-20s ok\n", name)

@@ -12,6 +12,10 @@ import (
 	"github.com/Dillonsmart/docket/internal/gitx"
 )
 
+// hookMarker is the comment every hook script docket writes begins with. init
+// and doctor use it to tell docket's own hooks from someone else's.
+const hookMarker = "# Installed by docket"
+
 // gitHooks are the two git hooks docket installs.
 //
 // The commit trailer is written by prepare-commit-msg on purpose: the audited
@@ -49,7 +53,7 @@ func cmdInit(env *env, args []string) error {
 		script := hookScript(name, bin)
 		existing, err := os.ReadFile(path)
 		switch {
-		case err == nil && strings.Contains(string(existing), "docket hook "):
+		case err == nil && strings.Contains(string(existing), hookMarker):
 			if string(existing) != script {
 				if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 					return err
@@ -140,7 +144,7 @@ func hookScript(name, bin string) string {
 	// Somebody will clone this repository without the binary installed, and a
 	// tool that blocks their commits is a tool they will delete.
 	return fmt.Sprintf(`#!/bin/sh
-# Installed by docket (https://github.com/Dillonsmart/docket).
+%s (https://github.com/Dillonsmart/docket).
 #
 # docket never fails a commit: this hook exits 0 when docket is absent or when
 # the record cannot be built. Failures are written to .git/docket/docket.log.
@@ -150,7 +154,7 @@ if [ ! -x "$BIN" ]; then
 fi
 [ -n "$BIN" ] || exit 0
 exec "$BIN" hook %s "$@"
-`, bin, name)
+`, hookMarker, bin, name)
 }
 
 // agentHooksPath is where Claude Code reads project settings from.
