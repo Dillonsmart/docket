@@ -8,6 +8,7 @@ package build
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -386,13 +387,14 @@ func candidates(tl *timeline.Timeline, h attribute.Hunk, base string, commitAt t
 		if !commitAt.IsZero() && c.At.After(commitAt) {
 			continue
 		}
-		ex := redact.Excerpt(c.Command, 160)
-		cand := cer.Candidate{Command: ex.Text, Hint: c.MutationHint, At: stamp(c.At)}
-		if strings.Contains(c.Command, h.Path) || (name != "" && strings.Contains(c.Command, name)) {
+		cand := cer.Candidate{Hint: c.MutationHint, At: stamp(c.At)}
+		if line := namingLine(c.Command, h.Path, name); line != "" {
+			cand.Command = redact.Excerpt(line, 160).Text
 			cand.PathMentioned = true
 			mentioned = append(mentioned, cand)
 			continue
 		}
+		cand.Command = redact.Excerpt(c.Command, 160).Text
 		others = append(others, cand)
 	}
 	out := mentioned
@@ -409,6 +411,64 @@ func candidates(tl *timeline.Timeline, h attribute.Hunk, base string, commitAt t
 		out = out[:3]
 	}
 	return out
+}
+
+var heredocStart = regexp.MustCompile(`<<-?\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))`)
+
+// commandLines is a command split into lines with heredoc bodies dropped. A
+// file named inside a body is content being written somewhere else — a README
+// mentioned in a script, say — and matching on it produced candidates for the
+// wrong file.
+func commandLines(cmd string) []string {
+	lines := strings.Split(cmd, "\n")
+	var out []string
+	for i := 0; i < len(lines); i++ {
+		out = append(out, lines[i])
+		m := heredocStart.FindStringSubmatch(lines[i])
+		if m == nil {
+			continue
+		}
+		term := m[1] + m[2] + m[3]
+		for i++; i < len(lines); i++ {
+			if strings.TrimLeft(lines[i], "\t") == term {
+				out = append(out, lines[i])
+				break
+			}
+		}
+	}
+	return out
+}
+
+// namingLine returns the line of a command that names the file, or "". In a
+// script of many commands the line that matters is the one that touched the
+// file, not the first one.
+func namingLine(cmd, path, name string) string {
+	for _, line := range commandLines(cmd) {
+		if mentions(line, path) || (name != "" && name != path && mentions(line, name)) {
+			return line
+		}
+	}
+	return ""
+}
+
+// mentions reports whether a path appears in a line as itself or as the tail
+// of an absolute or dot-relative path — so action/README.md is not taken for
+// README.md, but /home/me/repo/README.md and ./README.md are.
+func mentions(line, path string) bool {
+	const boundary = " \t'\"=:(,<>|;&"
+	for i := strings.Index(line, path); i >= 0; {
+		start := strings.LastIndexAny(line[:i], boundary) + 1
+		prefix := line[start:i]
+		if prefix == "" || prefix[0] == '/' || prefix[0] == '.' || prefix[0] == '~' {
+			return true
+		}
+		next := strings.Index(line[i+1:], path)
+		if next < 0 {
+			return false
+		}
+		i += 1 + next
+	}
+	return false
 }
 
 // LoadSessions gathers every source of evidence about this repository: the agent
