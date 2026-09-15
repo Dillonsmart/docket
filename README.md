@@ -115,7 +115,7 @@ curl -fsSL https://raw.githubusercontent.com/Dillonsmart/docket/main/install.sh 
 `docket version` prints what you have. To pin a version, or to roll back, set `DOCKET_VERSION` on the `sh` side of the pipe:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Dillonsmart/docket/main/install.sh | DOCKET_VERSION=v0.0.5 sh
+curl -fsSL https://raw.githubusercontent.com/Dillonsmart/docket/main/install.sh | DOCKET_VERSION=v0.0.6 sh
 ```
 
 From source, `go install github.com/Dillonsmart/docket/cmd/docket@latest` again. In CI, the action's default `version: latest` picks up the newest release on each run; pin it to a tag if you want to control when that happens.
