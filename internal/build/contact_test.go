@@ -94,3 +94,14 @@ func TestFileLevelHumanEditDoesNotClaimUntouchedHunks(t *testing.T) {
 		t.Errorf("contact = %q, want none: the file changed, these lines did not", got)
 	}
 }
+
+// A prompt on a shell command showed the command, not the lines it wrote.
+func TestGatedShellCommandIsNotApproval(t *testing.T) {
+	h := attribute.Hunk{Reasons: map[timeline.Reason]int{}, Primary: &transcript.FileEdit{
+		Actor: transcript.ActorAgent, AgentID: "claude-code/main", Source: transcript.SourceObserved,
+		Gate: transcript.GatePrompted, GateDetail: "default"}}
+	got, basis := contact(h)
+	if got != cer.ContactNone || !strings.Contains(basis, "command rather than the diff") {
+		t.Errorf("contact = %q (%q)", got, basis)
+	}
+}

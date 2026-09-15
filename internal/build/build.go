@@ -8,7 +8,6 @@ package build
 
 import (
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -222,7 +221,7 @@ func recordHunk(tl *timeline.Timeline, corr *evidence.Correlator, h attribute.Hu
 	if h.Primary != nil {
 		e := h.Primary
 		task := redact.Excerpt(e.Task, 200)
-		intent := redact.Excerpt(e.Intent, 200)
+		said, intent := intentOf(e, 200)
 		cmd := redact.Excerpt(e.Command, 200)
 		rules = append(rules, task.Rules...)
 		rules = append(rules, intent.Rules...)
@@ -230,7 +229,7 @@ func recordHunk(tl *timeline.Timeline, corr *evidence.Correlator, h attribute.Hu
 		ch.Origin = cer.Origin{
 			Actor: string(e.Actor), AgentID: e.AgentID, Model: e.Model,
 			Session: e.SessionID, Task: task.Text, Tool: e.Tool,
-			Source: e.Source, At: stamp(e.At), Intent: intent.Text, Command: cmd.Text,
+			Source: e.Source, At: stamp(e.At), Intent: intent.Text, IntentSource: said, Command: cmd.Text,
 		}
 	} else {
 		ch.Origin = cer.Origin{Actor: cer.ActorUnknown}
@@ -256,6 +255,7 @@ func recordHunk(tl *timeline.Timeline, corr *evidence.Correlator, h attribute.Hu
 		rules = append(rules, attRules...)
 		ch.Attempts = append(ch.Attempts, att)
 	}
+	ch.Attempts = mergeAttempts(ch.Attempts)
 	// An attempt with a failing check behind it is the one a reviewer wants: it
 	// says the obvious fix was tried and what happened to it. Ordinary
 	// self-revision is kept but ranked below, and the list is capped so a heavily
@@ -269,12 +269,52 @@ func recordHunk(tl *timeline.Timeline, corr *evidence.Correlator, h attribute.Hu
 	if len(ch.Attempts) > maxAttempts {
 		ch.Attempts = ch.Attempts[:maxAttempts]
 	}
+	// Chosen by weight, told in order: the attempts read as the sequence of
+	// decisions they were.
+	sort.SliceStable(ch.Attempts, func(i, j int) bool { return ch.Attempts[i].At < ch.Attempts[j].At })
 
 	ev, evRules := corr.ForHunk(h)
 	rules = append(rules, evRules...)
 	ch.Evidence = ev
 	ch.Density = evidence.Density(h, ev, ch.HumanContact, trust)
 	return ch, redact.Merge(rules)
+}
+
+// mergeAttempts folds removals that tell the same story — same edit's account,
+// same replacement, same failing check — into one. A rewrite of several
+// regions of a file is one decision, and listing it once per region pushed
+// the smaller, later decisions off the capped list.
+func mergeAttempts(in []cer.Attempt) []cer.Attempt {
+	type key struct{ summary, reason, by string }
+	idx := map[key]int{}
+	var out []cer.Attempt
+	for _, a := range in {
+		k := key{a.Summary, a.Reason, a.ReplacedBy}
+		if i, ok := idx[k]; ok {
+			out[i].Lines += a.Lines
+			if a.At < out[i].At {
+				out[i].At = a.At
+			}
+			continue
+		}
+		idx[k] = len(out)
+		out = append(out, a)
+	}
+	return out
+}
+
+// intentOf is what the agent said before the edit, or failing that what it
+// thought. The harness does not always keep the former, and the latter is
+// where the reason for a change of approach usually is — but the record says
+// which it was, since one was addressed to the human and the other was not.
+func intentOf(e *transcript.FileEdit, limit int) (string, redact.Result) {
+	if strings.TrimSpace(e.Intent) != "" {
+		return cer.IntentSaid, redact.Excerpt(e.Intent, limit)
+	}
+	if strings.TrimSpace(e.Reasoning) != "" {
+		return cer.IntentThought, redact.Excerpt(e.Reasoning, limit)
+	}
+	return "", redact.Excerpt("", limit)
 }
 
 // contact ranks what can be claimed about a person and these lines: lines
@@ -300,14 +340,19 @@ func contact(h attribute.Hunk) (string, string) {
 		harness = harness[:i]
 	}
 	setting := harness + " " + e.GateDetail
-	switch e.Gate {
-	case transcript.GatePrompted:
+	shell := e.Source == transcript.SourceObserved
+	switch {
+	case e.Gate == transcript.GatePrompted && shell:
+		// The prompt showed a shell command, not these lines.
+		return cer.ContactNone, "the command that wrote these lines ran under a permission prompt (" + setting + "), which showed the command rather than the diff"
+	case e.Gate == transcript.GatePrompted:
 		return cer.ContactApproved, "the edit ran under a permission prompt (" + setting + ")"
-	case transcript.GateAuto:
+	case e.Gate == transcript.GateAuto && shell:
+		return cer.ContactNone, "the command that wrote these lines ran without a prompt (" + setting + ")"
+	case e.Gate == transcript.GateAuto:
 		return cer.ContactNone, "the edit was written without a prompt (" + setting + ")"
-	}
-	if e.Source == transcript.SourceObserved {
-		return cer.ContactNone, "the edit was made through the shell, where nothing gates it"
+	case shell:
+		return cer.ContactNone, "the edit was made through the shell, and the command could not be matched to the transcript"
 	}
 	return cer.ContactNone, "the transcript does not record whether a prompt was in force"
 }
@@ -321,7 +366,7 @@ func attempt(tl *timeline.Timeline, r timeline.Removal) (cer.Attempt, []string) 
 
 	summary := fmt.Sprintf("%d lines written in %s and later removed", r.Lines, r.Path)
 	if orig != nil {
-		intent := redact.Excerpt(orig.Intent, 160)
+		_, intent := intentOf(orig, 160)
 		if intent.Text != "" {
 			summary = intent.Text
 		} else if orig.Command != "" {
@@ -347,6 +392,13 @@ func attempt(tl *timeline.Timeline, r timeline.Removal) (cer.Attempt, []string) 
 			a.Reason = reason
 			rules = append(rules, reasonRules...)
 		}
+	}
+	if a.Outcome == "superseded" && remover != nil {
+		// What the replacing edit said it was doing is the closest thing to a
+		// reason when no check failed in between.
+		_, by := intentOf(remover, 160)
+		a.ReplacedBy = by.Text
+		rules = append(rules, by.Rules...)
 	}
 	return a, rules
 }
@@ -413,37 +465,11 @@ func candidates(tl *timeline.Timeline, h attribute.Hunk, base string, commitAt t
 	return out
 }
 
-var heredocStart = regexp.MustCompile(`<<-?\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))`)
-
-// commandLines is a command split into lines with heredoc bodies dropped. A
-// file named inside a body is content being written somewhere else — a README
-// mentioned in a script, say — and matching on it produced candidates for the
-// wrong file.
-func commandLines(cmd string) []string {
-	lines := strings.Split(cmd, "\n")
-	var out []string
-	for i := 0; i < len(lines); i++ {
-		out = append(out, lines[i])
-		m := heredocStart.FindStringSubmatch(lines[i])
-		if m == nil {
-			continue
-		}
-		term := m[1] + m[2] + m[3]
-		for i++; i < len(lines); i++ {
-			if strings.TrimLeft(lines[i], "\t") == term {
-				out = append(out, lines[i])
-				break
-			}
-		}
-	}
-	return out
-}
-
 // namingLine returns the line of a command that names the file, or "". In a
 // script of many commands the line that matters is the one that touched the
 // file, not the first one.
 func namingLine(cmd, path, name string) string {
-	for _, line := range commandLines(cmd) {
+	for _, line := range transcript.CommandLines(cmd) {
 		if mentions(line, path) || (name != "" && name != path && mentions(line, name)) {
 			return line
 		}
@@ -524,8 +550,42 @@ func LoadSessions(repo *gitx.Repo, override []string) ([]*transcript.Session, []
 			}
 		}
 	}
+	link(sessions)
 	sort.SliceStable(info, func(i, j int) bool { return info[i].ID < info[j].ID })
 	return sessions, info, nil
+}
+
+// link gives each observed edit the transcript's account of the shell command
+// that made it. The collector sees the file change but not the conversation;
+// the transcript has the request, the agent's stated intent and the permission
+// setting, but not the file. Both record the tool call's id, and that is the
+// join. Without it an agent that edits through the shell leaves no reasoning
+// in the record at all.
+func link(sessions []*transcript.Session) {
+	byID := map[string]*transcript.Command{}
+	for _, s := range sessions {
+		for _, c := range s.Commands {
+			if c.ID != "" {
+				byID[c.ID] = c
+			}
+		}
+	}
+	for _, s := range sessions {
+		for _, e := range s.Edits {
+			if e.Source != transcript.SourceObserved || e.CommandID == "" {
+				continue
+			}
+			c := byID[e.CommandID]
+			if c == nil {
+				continue
+			}
+			e.Task, e.Intent, e.Reasoning = c.Task, c.Intent, c.Reasoning
+			e.Gate, e.GateDetail = c.Gate, c.GateDetail
+			if e.Model == "" {
+				e.Model = c.Model
+			}
+		}
+	}
 }
 
 // seedFrom lets the replay start from the file as it was before this change.

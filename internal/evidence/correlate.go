@@ -41,7 +41,8 @@ func (c *Correlator) ForHunk(h attribute.Hunk) ([]cer.Evidence, []string) {
 	}
 
 	written := c.writtenAt(h)
-	lastTouched := c.lastTouched(h.Path)
+	lastTouched, lastCommand := c.lastTouched(h.Path)
+	writers := c.writtenBy(h)
 
 	checks := 0
 	for _, cmd := range c.tl.Commands {
@@ -51,12 +52,16 @@ func (c *Correlator) ForHunk(h attribute.Hunk) ([]cer.Evidence, []string) {
 		if cmd.At.IsZero() || (!c.commitAt.IsZero() && cmd.At.After(c.commitAt)) {
 			continue
 		}
-		observed := !written.IsZero() && !cmd.At.Before(written)
+		// An observed edit is stamped when the command finished, and the command
+		// when it started, so a check in the same shell call as the write sorts
+		// before it. The call's id says they are one and the same.
+		sameCall := writers[cmd.ID]
+		observed := sameCall || (!written.IsZero() && !cmd.At.Before(written))
 		if !observed {
 			// A check that ran before the code existed is not evidence about it.
 			continue
 		}
-		ref := redact.Excerpt(cmd.Command, 160)
+		ref := redact.Excerpt(firstNonEmpty(cmd.Test.Invocation, cmd.Command), 160)
 		rules = append(rules, ref.Rules...)
 		ev := cer.Evidence{
 			Kind: kindOf(cmd), Ref: ref.Text, Result: cmd.Test.Outcome,
@@ -64,7 +69,10 @@ func (c *Correlator) ForHunk(h attribute.Hunk) ([]cer.Evidence, []string) {
 			At: stamp(cmd.At),
 		}
 		ev.Transitioned = c.transitioned(cmd, written)
-		if !lastTouched.IsZero() && lastTouched.After(cmd.At) {
+		if sameCall {
+			ev.Confidence = ev.Confidence + ",same_command_as_edit"
+		}
+		if !lastTouched.IsZero() && lastTouched.After(cmd.At) && lastCommand != cmd.ID {
 			// The file changed again after this check, so the committed content is
 			// not what was checked. Recorded rather than dropped: a reviewer wants
 			// to know the green tick is out of date.
@@ -151,18 +159,34 @@ func (c *Correlator) writtenAt(h attribute.Hunk) time.Time {
 	return latest
 }
 
-// lastTouched is when the file was last edited in the session.
-func (c *Correlator) lastTouched(path string) time.Time {
+// lastTouched is when the file was last edited in the session, and by which
+// shell call if an observed edit.
+func (c *Correlator) lastTouched(path string) (time.Time, string) {
 	ft := c.tl.EditsFor(path)
 	if ft == nil || len(ft.Edits) == 0 {
-		return time.Time{}
+		return time.Time{}, ""
 	}
-	return ft.Edits[len(ft.Edits)-1].At
+	last := ft.Edits[len(ft.Edits)-1]
+	return last.At, last.CommandID
 }
 
-// transitioned reports whether the same runner failed before the code was
+// writtenBy is the set of shell calls whose observed edits contributed to the
+// hunk.
+func (c *Correlator) writtenBy(h attribute.Hunk) map[string]bool {
+	out := map[string]bool{}
+	for _, contrib := range h.Contributions {
+		if e := c.tl.Edits[contrib.EditID]; e != nil && e.CommandID != "" {
+			out[e.CommandID] = true
+		}
+	}
+	return out
+}
+
+// transitioned reports whether the same check failed before the code was
 // written and passes now. A check that was already green proves much less than
-// one this change turned green, and the difference is worth recording.
+// one this change turned green, and the difference is worth recording. "Same"
+// means the same invocation, not just the same runner: a failure in one
+// package says nothing about a pass in another.
 func (c *Correlator) transitioned(cmd *transcript.Command, written time.Time) bool {
 	if cmd.Test == nil || cmd.Test.Outcome != "pass" || written.IsZero() {
 		return false
@@ -171,11 +195,20 @@ func (c *Correlator) transitioned(cmd *transcript.Command, written time.Time) bo
 		if prev.Test == nil || prev.At.IsZero() || !prev.At.Before(written) {
 			continue
 		}
-		if prev.Test.Runner == cmd.Test.Runner && prev.Test.Outcome == "fail" {
+		if prev.Test.Runner == cmd.Test.Runner && prev.Test.Invocation == cmd.Test.Invocation && prev.Test.Outcome == "fail" {
 			return true
 		}
 	}
 	return false
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func stamp(t time.Time) string {

@@ -270,3 +270,59 @@ func TestEditCarriesThePermissionModeInForce(t *testing.T) {
 		}
 	}
 }
+
+// What the agent said before a prompt was about something else.
+func TestIntentResetsOnANewPrompt(t *testing.T) {
+	prompt := func(uuid, text string) map[string]any {
+		return map[string]any{"type": "user", "uuid": uuid, "sessionId": "s1", "timestamp": "2026-09-13T10:00:00.000Z",
+			"message": map[string]any{"role": "user", "content": text}}
+	}
+	result := map[string]any{"type": "create", "filePath": "/repo/a.go", "content": "x\n",
+		"originalFile": nil, "structuredPatch": []any{}, "userModified": false}
+	path := writeTranscript(t, []map[string]any{
+		prompt("p1", "first"),
+		toolUse("a1", "t1", "Write", map[string]any{"file_path": "/repo/a.go", "content": "x\n"}, "About the first thing."),
+		toolResult("u1", "t1", result),
+		prompt("p2", "second"),
+		toolUse("a2", "t2", "Write", map[string]any{"file_path": "/repo/a.go", "content": "x\n"}, ""),
+		toolResult("u2", "t2", result),
+	})
+	s, _, err := Parse(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Edits) != 2 {
+		t.Fatalf("got %d edits", len(s.Edits))
+	}
+	if s.Edits[0].Intent != "About the first thing." {
+		t.Errorf("first intent = %q", s.Edits[0].Intent)
+	}
+	if s.Edits[1].Intent != "" {
+		t.Errorf("second edit inherited the first turn's narration: %q", s.Edits[1].Intent)
+	}
+}
+
+// Thinking is kept apart from what was said, and both are forgotten at a new
+// prompt.
+func TestReasoningIsRecordedSeparatelyFromNarration(t *testing.T) {
+	result := map[string]any{"type": "create", "filePath": "/repo/a.go", "content": "x\n",
+		"originalFile": nil, "structuredPatch": []any{}, "userModified": false}
+	thinking := func(uuid, text string) map[string]any {
+		return map[string]any{"type": "assistant", "uuid": uuid, "sessionId": "s1", "timestamp": "2026-09-13T10:00:00.000Z",
+			"message": map[string]any{"role": "assistant", "model": "claude-opus-5",
+				"content": []any{map[string]any{"type": "thinking", "thinking": text}}}}
+	}
+	path := writeTranscript(t, []map[string]any{
+		thinking("th1", "The old rule rejects absolute paths."),
+		toolUse("a1", "t1", "Write", map[string]any{"file_path": "/repo/a.go", "content": "x\n"}, "Loosening the rule."),
+		toolResult("u1", "t1", result),
+	})
+	s, _, err := Parse(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := s.Edits[0]
+	if e.Intent != "Loosening the rule." || e.Reasoning != "The old rule rejects absolute paths." {
+		t.Errorf("intent = %q, reasoning = %q", e.Intent, e.Reasoning)
+	}
+}

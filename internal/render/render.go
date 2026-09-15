@@ -230,7 +230,11 @@ func hunkText(s style, h cer.Hunk) string {
 			fmt.Fprintf(&b, "  task        %s\n", h.Origin.Task)
 		}
 		if h.Origin.Intent != "" {
-			fmt.Fprintf(&b, "  intent      %s\n", s.dim(h.Origin.Intent))
+			label := "intent      "
+			if h.Origin.IntentSource == cer.IntentThought {
+				label = "reasoning   " // thought, not said: the harness kept no narration
+			}
+			fmt.Fprintf(&b, "  %s%s\n", label, s.dim(h.Origin.Intent))
 		}
 		if h.Origin.Command != "" {
 			fmt.Fprintf(&b, "  command     %s\n", s.dim(h.Origin.Command))
@@ -247,6 +251,10 @@ func hunkText(s style, h cer.Hunk) string {
 		fmt.Fprintf(&b, "  attempt     %s [%s]\n", a.Summary, a.Outcome)
 		if a.Reason != "" {
 			fmt.Fprintf(&b, "              %s\n", s.amber(a.Reason))
+		}
+		if a.ReplacedBy != "" && a.ReplacedBy != h.Origin.Intent && a.ReplacedBy != a.Summary {
+			// Already on screen as the intent line, or the same thought carried over two edits.
+			fmt.Fprintf(&b, "              replaced by: %s\n", a.ReplacedBy)
 		}
 	}
 	if len(h.Evidence) == 0 {

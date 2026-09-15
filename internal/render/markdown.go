@@ -143,7 +143,11 @@ func hunkMarkdown(h cer.Hunk, o MarkdownOptions) string {
 			fmt.Fprintf(&b, "- **asked for** %s\n", h.Origin.Task)
 		}
 		if h.Origin.Intent != "" {
-			fmt.Fprintf(&b, "- **said it was doing** %s\n", h.Origin.Intent)
+			if h.Origin.IntentSource == cer.IntentThought {
+				fmt.Fprintf(&b, "- **reasoned** %s\n", h.Origin.Intent)
+			} else {
+				fmt.Fprintf(&b, "- **said it was doing** %s\n", h.Origin.Intent)
+			}
 		}
 	}
 
@@ -151,6 +155,9 @@ func hunkMarkdown(h cer.Hunk, o MarkdownOptions) string {
 		fmt.Fprintf(&b, "- **tried first** %s — %s", a.Summary, a.Outcome)
 		if a.Reason != "" {
 			fmt.Fprintf(&b, " (%s)", a.Reason)
+		}
+		if a.ReplacedBy != "" && a.ReplacedBy != h.Origin.Intent && a.ReplacedBy != a.Summary {
+			fmt.Fprintf(&b, "; replaced by: %s", a.ReplacedBy)
 		}
 		b.WriteString("\n")
 	}

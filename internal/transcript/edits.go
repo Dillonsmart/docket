@@ -72,7 +72,7 @@ func buildEdit(id, tool string, seq int, p pending, raw json.RawMessage) *FileEd
 	e := &FileEdit{
 		ID: id, Tool: tool, Path: path, Sequence: seq, At: p.at,
 		Actor: ActorAgent, Model: p.model, SessionID: p.session,
-		IsSidechain: p.side, Task: p.task, Intent: p.intent,
+		IsSidechain: p.side, Task: p.task, Intent: p.intent, Reasoning: p.reasoning,
 		UserModified: res.UserModified, Skill: p.skill,
 		AgentID: agentID(p.side, p.task), Source: SourceTranscript,
 		Gate: gateFor(p.mode), GateDetail: p.mode,
@@ -163,16 +163,17 @@ func buildEdit(id, tool string, seq int, p pending, raw json.RawMessage) *FileEd
 // pending is the in-flight tool-call state carried from the assistant record
 // that made the call to the user record that carries its result.
 type pending struct {
-	name    string
-	input   json.RawMessage
-	at      time.Time
-	model   string
-	side    bool
-	session string
-	intent  string
-	task    string
-	skill   string
-	mode    string // permission mode in force when the tool was called
+	name      string
+	input     json.RawMessage
+	at        time.Time
+	model     string
+	side      bool
+	session   string
+	intent    string
+	reasoning string
+	task      string
+	skill     string
+	mode      string // permission mode in force when the tool was called
 }
 
 // Only "default" asks before writing. An unrecorded mode stays unknown: guessing
@@ -290,6 +291,7 @@ func buildCommand(id string, seq int, p pending, raw json.RawMessage) *Command {
 		ID: id, Sequence: seq, At: p.at, Command: in.Command, Description: in.Description,
 		Stdout: res.Stdout, Stderr: res.Stderr, Interrupted: res.Interrupted,
 		Actor: ActorAgent, SessionID: p.session, Model: p.model,
+		Task: p.task, Intent: p.intent, Reasoning: p.reasoning, Gate: gateFor(p.mode), GateDetail: p.mode,
 	}
 	classifyCommand(c)
 	return c
@@ -379,6 +381,32 @@ var mutators = []struct {
 	{"interpreter-script", regexp.MustCompile(`\b(?:python3?|node|ruby|php)\s+-\b|\b(?:python3?|node)\s+<<`)},
 }
 
+var heredocStart = regexp.MustCompile(`<<-?\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))`)
+
+// CommandLines is a command split into lines with heredoc bodies dropped. A
+// file named inside a body is content being written somewhere else — a README
+// mentioned in a script, say — and matching on it produced candidates for the
+// wrong file.
+func CommandLines(cmd string) []string {
+	lines := strings.Split(cmd, "\n")
+	var out []string
+	for i := 0; i < len(lines); i++ {
+		out = append(out, lines[i])
+		m := heredocStart.FindStringSubmatch(lines[i])
+		if m == nil {
+			continue
+		}
+		term := m[1] + m[2] + m[3]
+		for i++; i < len(lines); i++ {
+			if strings.TrimLeft(lines[i], "\t") == term {
+				out = append(out, lines[i])
+				break
+			}
+		}
+	}
+	return out
+}
+
 // ClassifyCommand works out whether a command was a check and how it went. It
 // is exported because every agent's collector needs the same reading of the
 // same shell commands.
@@ -391,6 +419,12 @@ func classifyCommand(c *Command) {
 			continue
 		}
 		t := &TestRun{Runner: r.name, Outcome: "unknown", Confidence: "output_pattern"}
+		for _, line := range CommandLines(c.Command) {
+			if r.re.MatchString(line) {
+				t.Invocation = strings.TrimSpace(line)
+				break
+			}
+		}
 		code, hasCode := 0, false
 		if c.ExitCode != nil {
 			// An exit status the harness recorded itself is the last word.

@@ -176,6 +176,7 @@ func readSession(db, id, dir, version string) (*transcript.Session, error) {
 			if t := strings.TrimSpace(part.Text); t != "" {
 				if info.role == "user" {
 					lastPrompt = t
+					lastText = "" // said before this prompt, about something else
 					s.Prompts = append(s.Prompts, transcript.Prompt{Text: t, At: at})
 				} else {
 					lastText = t

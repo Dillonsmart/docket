@@ -402,7 +402,7 @@ func (s *Store) toEdit(ev Event, seq int) *transcript.FileEdit {
 		ID:   "observed:" + shortBlob(ev.PostBlob) + ":" + fmt.Sprint(seq),
 		Tool: firstNonEmpty(ev.Tool, "Bash"), Path: abs, Sequence: seq, At: ev.At,
 		Actor: actorOf(ev.Actor), AgentID: agentOf(ev.Actor), SessionID: ev.Session,
-		Source: transcript.SourceObserved, Command: ev.Command, Created: ev.Created,
+		Source: transcript.SourceObserved, Command: ev.Command, CommandID: ev.ToolUseID, Created: ev.Created,
 	}
 	if ev.Oversize {
 		// The content was never read, so nothing about its lines can be claimed.

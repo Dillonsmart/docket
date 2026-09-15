@@ -66,6 +66,30 @@ scripts/demo.sh
 
 This creates a throwaway repository in a temp directory with a recorded agent session in it. The agent fixes a session fixation bug, gets it wrong once, sees a test fail, fixes it properly, and also edits a second file through the shell, which the transcript does not record. It then prints the docket for the commit so you can see both kinds of hunk. Your own repositories are not touched and the directory is deleted on exit. It needs `docket` on your PATH, or `DOCKET=/path/to/docket`.
 
+### Or read this repository's own records
+
+Docket records its own development. Clone it, fetch the records, and read the history of the tool from the tool:
+
+```sh
+git clone https://github.com/Dillonsmart/docket && cd docket
+docket fetch                          # records live on refs/docket/records, which git does not fetch by default
+
+docket show HEAD                      # the last commit, riskiest hunks first
+docket show --all HEAD                # including the hunks with evidence behind them
+
+# a commit the agent made through the shell: docket watched the files, and the tests ran in the same call
+docket show --all $(git log --format=%h --grep='Join an observed edit' -1)
+
+# why does this function exist? git blame finds the commit, the record explains the hunk
+docket explain internal/build/build.go:$(grep -n 'func link(' internal/build/build.go | cut -d: -f1)
+
+docket review --range v0.0.5..v0.0.6 --format md   # a release reviewed as one change, least-verified hunks first
+docket verify HEAD                    # the record is intact, signed, and describes this commit
+docket doctor                         # what docket can see on this machine
+```
+
+The records were made on the author's machine, so they read `trust local_claimed`. `docket gate` and `--rebuild` need the session transcripts, which stay on that machine; everything else works from the clone. A record is built once, at commit time, with whatever docket could do then — so older commits carry thinner records than newer ones, and that is the history, not a bug.
+
 ### Set up a repository
 
 ```sh

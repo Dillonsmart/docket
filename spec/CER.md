@@ -70,7 +70,9 @@ A record is a single JSON object. Unknown members must be preserved by consumers
 
 ### 2.2 Origin
 
-`actor` is `agent`, `human` or `unknown`. For an agent: `agent_id`, `model`, `session`, `task` (the request this descends from), `tool`, `at`, `intent` (what the agent said it was doing), and `command` for shell-driven edits.
+`actor` is `agent`, `human` or `unknown`. For an agent: `agent_id`, `model`, `session`, `task` (the request this descends from), `tool`, `at`, `intent`, and `command` for shell-driven edits.
+
+`intent` is what the agent said it was doing immediately before the edit. When the harness kept no narration but did keep the agent's reasoning, an implementation may use that instead and must then set `intent_source` to `thought`; narration is `said`. The distinction is recorded because one was addressed to the human and the other was not, and a reader weighs them differently.
 
 `agent_id` is `<harness>/<role>` — `claude-code/main`, `claude-code/subagent`, `codex/main`, `opencode/main` — and the session it belongs to carries the harness name in `sessions[].agent`. An implementation must not invent a role it cannot establish: a harness that does not record which subagent definition ran says `subagent`, not a name.
 
@@ -80,7 +82,7 @@ A record must not populate `agent_id` or `model` when `actor` is `unknown`.
 
 ### 2.3 Attempt
 
-`{summary, outcome, reason, lines, at, sample}` where `outcome` is `abandoned` or `superseded`. `reason` should name the check that failed between the attempt and its removal, when one did. An attempt without evidence that it existed must not be recorded.
+`{summary, outcome, reason, replaced_by, lines, at, sample}` where `outcome` is `abandoned` or `superseded`. `reason` should name the check that failed between the attempt and its removal, when one did. `replaced_by` is what the superseding edit said it was doing, when the harness recorded that: the stated reason for the change of approach, which is the decision a reader is usually looking for. An attempt without evidence that it existed must not be recorded.
 
 ### 2.4 Evidence
 

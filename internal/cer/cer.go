@@ -41,6 +41,12 @@ const (
 	ActorUnknown = "unknown"
 )
 
+// Intent source values.
+const (
+	IntentSaid    = "said"
+	IntentThought = "thought"
+)
+
 // Human contact values: claims about these lines, each earned from something
 // recorded (spec §2.6). There is no "viewed" — a terminal has no read receipts,
 // and a value nothing can produce invites guessing.
@@ -148,8 +154,11 @@ type Origin struct {
 	// itself, "transcript" when the harness reported it.
 	Source string `json:"source,omitempty"`
 	At     string `json:"at,omitempty"`
-	// Intent is what the agent said it was doing immediately before the edit.
-	Intent string `json:"intent,omitempty"`
+	// Intent is what the agent said it was doing immediately before the edit,
+	// or, when the harness kept no narration, what it thought. IntentSource
+	// says which: "said" was addressed to the human, "thought" was not.
+	Intent       string `json:"intent,omitempty"`
+	IntentSource string `json:"intent_source,omitempty"`
 	// Command is the shell command responsible, for observed edits.
 	Command string `json:"command,omitempty"`
 }
@@ -169,9 +178,12 @@ type Attempt struct {
 	Summary string `json:"summary"`
 	Outcome string `json:"outcome"` // abandoned | superseded
 	Reason  string `json:"reason,omitempty"`
-	Lines   int    `json:"lines"`
-	At      string `json:"at,omitempty"`
-	Sample  string `json:"sample,omitempty"`
+	// ReplacedBy is what the superseding edit said it was doing, for a
+	// superseded attempt: the stated reason for the change of approach.
+	ReplacedBy string `json:"replaced_by,omitempty"`
+	Lines      int    `json:"lines"`
+	At         string `json:"at,omitempty"`
+	Sample     string `json:"sample,omitempty"`
 }
 
 // Evidence is a verification signal attached to a hunk.

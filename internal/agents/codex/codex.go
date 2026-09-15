@@ -221,6 +221,7 @@ func Parse(path string) (*transcript.Session, transcript.ParseStats, error) {
 			case "user_message":
 				if t := strings.TrimSpace(p.Message); t != "" {
 					lastPrompt = t
+					lastAgentText = "" // said before this prompt, about something else
 					s.Prompts = append(s.Prompts, transcript.Prompt{Text: t, At: at})
 				}
 			case "agent_message":

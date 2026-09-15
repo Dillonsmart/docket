@@ -124,14 +124,17 @@ type FileEdit struct {
 	// ran against.
 	Replace *Replacement
 
-	Actor        Actor
-	AgentID      string
-	Model        string
-	SessionID    string
-	IsSidechain  bool
-	Task         string // the human request this edit descends from
-	Intent       string // what the agent said it was doing, immediately before
-	UserModified bool   // the harness saw the human change this file first
+	Actor       Actor
+	AgentID     string
+	Model       string
+	SessionID   string
+	IsSidechain bool
+	Task        string // the human request this edit descends from
+	Intent      string // what the agent said it was doing, immediately before
+	// Reasoning is the agent's recorded thinking before the call, kept apart
+	// from Intent: one was said to the human, the other was not.
+	Reasoning    string
+	UserModified bool // the harness saw the human change this file first
 	Skill        string
 
 	// Gate is whether a permission prompt stood between the agent and this
@@ -150,8 +153,11 @@ type FileEdit struct {
 	// because the plan's trust tiering starts here: an observed edit is evidence,
 	// a reported one is a claim.
 	Source string
-	// Command is the shell command responsible, for observed edits.
-	Command string
+	// Command is the shell command responsible, for observed edits, and
+	// CommandID the tool call that ran it. The ID is what lets an observed edit
+	// be joined back to the transcript's account of that call.
+	Command   string
+	CommandID string
 }
 
 // Gate values for FileEdit.
@@ -178,6 +184,9 @@ func (e *FileEdit) Seq() int { return e.Sequence }
 type TestRun struct {
 	Runner  string
 	Outcome string // pass, fail, unknown
+	// Invocation is the line of the command that ran the check. In a compound
+	// command it is the part a reader wants to see, not the edit before it.
+	Invocation string
 	// Confidence records that outcome came from output patterns, because the
 	// transcript does not record process exit codes.
 	Confidence string
@@ -207,6 +216,15 @@ type Command struct {
 	MayMutateFiles bool
 	MutationHint   string
 	Test           *TestRun
+
+	// Task and Intent are the request this command served and what the agent
+	// said before running it — the same account an edit carries, kept here so
+	// an edit observed under this command can inherit it.
+	Task       string
+	Intent     string
+	Reasoning  string
+	Gate       string
+	GateDetail string
 }
 
 // When implements Event.
@@ -345,6 +363,7 @@ type message struct {
 type block struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text"`
+	Thinking  string          `json:"thinking"`
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Input     json.RawMessage `json:"input"`
@@ -376,6 +395,7 @@ func Parse(path string) (*Session, ParseStats, error) {
 	pend := map[string]pending{}
 
 	lastAssistantText := ""
+	lastThinking := ""
 	lastPrompt := ""
 	lastTask := "" // subagent task, when a Task tool call is in flight
 	mode := ""     // permission mode in force, from the last permission-mode record
@@ -437,6 +457,10 @@ func Parse(path string) (*Session, ParseStats, error) {
 					if t := strings.TrimSpace(b.Text); t != "" {
 						lastAssistantText = t
 					}
+				case "thinking":
+					if t := strings.TrimSpace(b.Thinking); t != "" {
+						lastThinking = t
+					}
 				case "tool_use":
 					if b.Name == "Task" {
 						lastTask = taskOf(b.Input)
@@ -444,7 +468,7 @@ func Parse(path string) (*Session, ParseStats, error) {
 					pend[b.ID] = pending{
 						name: b.Name, input: b.Input, at: at, model: msg.Model,
 						side: rec.IsSidechain, session: rec.SessionID,
-						intent: lastAssistantText, task: promptOrTask(rec.IsSidechain, lastPrompt, lastTask),
+						intent: lastAssistantText, reasoning: lastThinking, task: promptOrTask(rec.IsSidechain, lastPrompt, lastTask),
 						skill: rec.Skill, mode: mode,
 					}
 				}
@@ -464,6 +488,8 @@ func Parse(path string) (*Session, ParseStats, error) {
 				} else if t := humanPrompt(text); t != "" {
 					lastPrompt = t
 					lastTask = ""
+					// What the agent said or thought before this prompt was about something else.
+					lastAssistantText, lastThinking = "", ""
 					s.Prompts = append(s.Prompts, Prompt{UUID: rec.UUID, Text: t, At: at})
 				}
 				continue

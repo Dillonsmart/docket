@@ -277,6 +277,9 @@
               "reason": {
                 "type": "string"
               },
+              "replaced_by": {
+                "type": "string"
+              },
               "lines": {
                 "type": "integer"
               },
@@ -451,6 +454,12 @@
         },
         "intent": {
           "type": "string"
+        },
+        "intent_source": {
+          "enum": [
+            "said",
+            "thought"
+          ]
         },
         "command": {
           "type": "string"
